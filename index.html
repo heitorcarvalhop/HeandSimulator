@@ -1,0 +1,115 @@
+<!doctype html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <title>Holo Voxel Hands — AR de Mãos com Blocos Holográficos</title>
+    <link rel="stylesheet" href="/src/styles/main.css" />
+  </head>
+  <body>
+    <div id="app">
+      <video id="webcam-video" autoplay playsinline muted></video>
+      <canvas id="scene-canvas"></canvas>
+      <canvas id="overlay-canvas"></canvas>
+
+      <div id="permission-screen" class="overlay-screen">
+        <div class="overlay-card">
+          <h1>Holo Voxel Hands</h1>
+          <p>
+            Esta aplicação usa a câmera do seu navegador para rastrear suas mãos e permitir que
+            você construa estruturas holográficas com gestos.
+          </p>
+          <button id="start-button" type="button">Ativar câmera</button>
+          <p id="permission-message" class="message"></p>
+        </div>
+      </div>
+
+      <div id="error-screen" class="overlay-screen hidden">
+        <div class="overlay-card">
+          <h1>Não foi possível iniciar a câmera</h1>
+          <p id="error-message"></p>
+          <button id="retry-button" type="button">Tentar novamente</button>
+          <button id="skip-camera-button" type="button">Continuar sem câmera (mouse)</button>
+        </div>
+      </div>
+
+      <div id="hud" class="hud hidden">
+        <div class="hud-row"><span class="hud-label">FPS</span><span id="hud-fps">--</span></div>
+        <div class="hud-row">
+          <span class="hud-label">Câmera</span><span id="hud-camera">--</span>
+        </div>
+        <div class="hud-row">
+          <span class="hud-label">Mãos</span><span id="hud-hands">0</span>
+        </div>
+        <div class="hud-row">
+          <span class="hud-label">Gesto E</span><span id="hud-gesture-left">--</span>
+        </div>
+        <div class="hud-row">
+          <span class="hud-label">Gesto D</span><span id="hud-gesture-right">--</span>
+        </div>
+        <div class="hud-row">
+          <span class="hud-label">Modo</span><span id="hud-mode">--</span>
+        </div>
+        <div class="hud-row">
+          <span class="hud-label">Voxels</span><span id="hud-voxels">0</span>
+        </div>
+        <div class="hud-row">
+          <span class="hud-label">Selecionado</span><span id="hud-selected">--</span>
+        </div>
+        <div class="hud-row">
+          <span class="hud-label">Escala</span><span id="hud-scale">1.00x</span>
+        </div>
+        <div class="hud-row">
+          <span class="hud-label">Qualidade</span><span id="hud-quality">alta</span>
+        </div>
+      </div>
+
+      <div id="toolbar" class="toolbar">
+        <button id="toolbar-toggle" class="toolbar-toggle" type="button" aria-label="Alternar barra">
+          ☰
+        </button>
+        <div id="toolbar-content" class="toolbar-content">
+          <div class="toolbar-group">
+            <button id="btn-camera-toggle" type="button">Câmera On/Off</button>
+            <button id="btn-clear" type="button">Limpar tudo</button>
+            <button id="btn-undo" type="button">Desfazer</button>
+            <button id="btn-redo" type="button">Refazer</button>
+          </div>
+          <div class="toolbar-group">
+            <button id="btn-demo-r" type="button">DEMONSTRAÇÃO R</button>
+            <button id="btn-save" type="button">Salvar</button>
+            <button id="btn-load" type="button">Carregar</button>
+            <button id="btn-export" type="button">Exportar JSON</button>
+            <button id="btn-import" type="button">Importar JSON</button>
+            <input id="import-file-input" type="file" accept="application/json" class="hidden" />
+          </div>
+          <div class="toolbar-group">
+            <button id="btn-debug" type="button">Debug</button>
+            <button id="btn-bloom" type="button">Bloom On/Off</button>
+            <button id="btn-segment" type="button">Seleção de segmento</button>
+            <label class="toolbar-label">
+              Tamanho voxel
+              <input id="input-voxel-size" type="range" min="0.3" max="1.5" step="0.05" value="0.6" />
+            </label>
+            <label class="toolbar-label">
+              Sensibilidade
+              <input id="input-sensitivity" type="range" min="0.5" max="2" step="0.05" value="1" />
+            </label>
+          </div>
+          <div class="toolbar-group">
+            <span class="toolbar-label">Modo de interação</span>
+            <select id="select-mode">
+              <option value="automatic">Automático</option>
+              <option value="build">Construção</option>
+              <option value="edit">Edição</option>
+              <option value="transform">Transformação</option>
+            </select>
+          </div>
+        </div>
+      </div>
+
+      <div id="gesture-hint" class="gesture-hint"></div>
+    </div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
