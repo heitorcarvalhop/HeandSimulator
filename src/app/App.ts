@@ -175,6 +175,7 @@ export class App {
       this.handTrackingReady = true;
     } catch (error) {
       const message = error instanceof HandTrackerInitError ? error.message : 'Falha ao carregar o MediaPipe.';
+      this.cameraManager.stop();
       this.showError(message);
       return;
     }

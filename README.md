@@ -266,8 +266,19 @@ câmera real, ver `src/tests/fixtures/handPoses.ts`):
   outro navegador ou atualize os drivers gráficos.
 - **Permissão de câmera negada**: clique em "Tentar novamente" após liberar a permissão
   nas configurações do site, ou use "Continuar sem câmera" para o modo mouse.
-- **Câmera em uso por outro app**: feche outros aplicativos que estejam usando a webcam
-  (Zoom, Teams, OBS, etc.) e tente novamente.
+- **Câmera em uso por outro app** (`NotReadableError` / "Could not start video source"):
+  feche outros aplicativos que estejam usando a webcam (Zoom, Teams, OBS, etc.) e tente
+  novamente. Se o erro persistir mesmo sem nenhum outro app usando a câmera — inclusive
+  numa página HTML mínima fora deste projeto, só com `getUserMedia` — o problema é do
+  Windows, não do app: o serviço **FrameServer** (Servidor de Quadros de Câmera do
+  Windows) trava e passa a bloquear qualquer programa. Solução mais rápida: reiniciar o
+  PC. Sem reiniciar, abra o PowerShell **como Administrador** e rode:
+  ```powershell
+  Restart-Service -Name FrameServer -Force
+  Restart-Service -Name FrameServerMonitor -Force
+  ```
+  Se persistir depois disso, verifique antivírus com "proteção de webcam" (Kaspersky,
+  Norton, ESET, etc.) e o driver da câmera no Gerenciador de Dispositivos.
 - **Mãos não aparecem**: verifique iluminação; o MediaPipe precisa de contraste razoável
   entre a mão e o fundo. O HUD mostra "Mãos: 0" quando nada é detectado.
 - **FPS baixo**: desligue o bloom no botão "Bloom On/Off" ou aguarde a redução automática
