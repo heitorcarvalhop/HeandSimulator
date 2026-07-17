@@ -69,6 +69,10 @@ export class Controls {
     byId<HTMLButtonElement>('btn-bloom').classList.toggle('active', enabled);
   }
 
+  setCameraButtonState(videoVisible: boolean): void {
+    byId<HTMLButtonElement>('btn-camera-toggle').classList.toggle('active', videoVisible);
+  }
+
   setSegmentButtonState(enabled: boolean): void {
     byId<HTMLButtonElement>('btn-segment').classList.toggle('active', enabled);
   }

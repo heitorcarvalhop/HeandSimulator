@@ -29,6 +29,8 @@ export class AppState {
   settings: SceneSettings = { ...DEFAULT_SCENE_SETTINGS };
   debug = false;
   cameraActive = false;
+  /** Controla só a exibição do <video> (fundo preto vs. imagem da webcam); o rastreamento de mãos roda igual nos dois estados. */
+  videoVisible = false;
 
   resetTransform(): void {
     copyTransformInPlace(this.transform, DEFAULT_MODEL_TRANSFORM);

@@ -34,6 +34,13 @@ body {
   transform: scaleX(-1);
   z-index: 0;
   background: #050505;
+  transition: opacity 0.2s ease;
+}
+
+/* O vídeo continua tocando (para o rastreamento de mãos), só fica invisível,
+   revelando o fundo preto do body por trás do canvas transparente. */
+#webcam-video.video-hidden {
+  opacity: 0;
 }
 
 #scene-canvas {

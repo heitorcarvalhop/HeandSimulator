@@ -78,12 +78,15 @@ export class App {
     window.addEventListener('resize', this.handleResize);
     document.addEventListener('visibilitychange', this.handleVisibilityChange);
 
-    byId<HTMLButtonElement>('start-button').addEventListener('click', () => void this.startWithCamera());
     byId<HTMLButtonElement>('retry-button').addEventListener('click', () => void this.startWithCamera());
     byId<HTMLButtonElement>('skip-camera-button').addEventListener('click', () => this.continueWithoutCamera());
 
     this.handleResize();
     this.loop(performance.now());
+
+    // Roda em Electron (não mais um site que exige clique do usuário), então a câmera
+    // é solicitada automaticamente assim que o app inicializa.
+    void this.startWithCamera();
   }
 
   private setupScene(): void {
@@ -114,7 +117,7 @@ export class App {
     this.hud = new Hud();
 
     const callbacks: ControlsCallbacks = {
-      onToggleCamera: () => void this.toggleCamera(),
+      onToggleCamera: () => this.toggleVideoVisibility(),
       onClear: () => this.clearAll(),
       onUndo: () => this.history.undo(),
       onRedo: () => this.history.redo(),
@@ -148,6 +151,8 @@ export class App {
         isCameraFallbackActive: () => true,
       },
     );
+
+    this.setVideoVisible(this.appState.videoVisible);
   }
 
   private async startWithCamera(): Promise<void> {
@@ -192,15 +197,15 @@ export class App {
     this.hud.show();
   }
 
-  private async toggleCamera(): Promise<void> {
-    if (this.appState.cameraActive) {
-      this.cameraManager.stop();
-      this.appState.cameraActive = false;
-      this.lastHandFrames = [];
-      this.lastGestureResults = [];
-      return;
-    }
-    await this.startWithCamera();
+  /** Alterna só a exibição visual do vídeo (imagem da webcam vs. fundo preto); a captura e o rastreamento de mãos continuam ativos nos dois estados. */
+  private toggleVideoVisibility(): void {
+    this.setVideoVisible(!this.appState.videoVisible);
+  }
+
+  private setVideoVisible(visible: boolean): void {
+    this.appState.videoVisible = visible;
+    this.video.classList.toggle('video-hidden', !visible);
+    this.controls.setCameraButtonState(visible);
   }
 
   private showError(message: string): void {
