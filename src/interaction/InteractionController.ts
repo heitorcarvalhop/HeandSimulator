@@ -4,18 +4,33 @@ import type { StableGesture } from '../hand-tracking/GestureStateMachine';
 import type { CoordinateMapper } from '../rendering/CoordinateMapper';
 import { findConnectedComponent } from '../voxels/ConnectedComponents';
 import { computeCreationLine } from '../voxels/VoxelBuilder';
-import { DEFAULT_VOXEL_COLOR, makeGroupId, type GridCoord } from '../voxels/Voxel';
+import { DEFAULT_VOXEL_COLOR, makeGroupId, type FreeTransform, type GridCoord } from '../voxels/Voxel';
+import { worldToLocalGrid, worldToLocalPoint } from './WorldGridMapping';
+import { snapToNearestCubeRotation, rotateGridOffset } from './PieceRotationSnap';
 import type { VoxelGrid } from '../voxels/VoxelGrid';
 import type { VoxelRenderer } from '../voxels/VoxelRenderer';
-import type { ModelTransform } from '../voxels/VoxelSerializer';
+import type { ModelTransform, PieceReleaseMode } from '../voxels/VoxelSerializer';
 import { HistoryManager } from '../history/HistoryManager';
 import type { Command } from '../history/Command';
-import { AddVoxelsCommand, CompositeCommand, MoveGroupCommand, RemoveVoxelsCommand, RotateModelCommand, ScaleModelCommand, MoveModelCommand, type GroupMoveEntry, type NewVoxelSpec } from '../history/VoxelCommands';
+import {
+  AddVoxelsCommand,
+  CompositeCommand,
+  MoveGroupCommand,
+  RemoveVoxelsCommand,
+  RotateModelCommand,
+  ScaleModelCommand,
+  MoveModelCommand,
+  SetFreeTransformCommand,
+  type GroupMoveEntry,
+  type NewVoxelSpec,
+} from '../history/VoxelCommands';
 import { CursorController, type HandCursor } from './CursorController';
 import { SelectionController } from './SelectionController';
 import {
   TransformController,
   type ModelDragState,
+  type PieceDragState,
+  type PieceDragTarget,
   type SwitchHandTransformState,
   type TwoHandDragState,
   type VoxelDragState,
@@ -40,6 +55,7 @@ export class InteractionController {
   private ownership: InteractionOwnership = { ...EMPTY_OWNERSHIP };
   private mode: InteractionMode = 'automatic';
   private allowFloatingVoxels = true;
+  private pieceReleaseMode: PieceReleaseMode = 'snap';
 
   private readonly cursorController: CursorController;
   private readonly transformController = new TransformController();
@@ -59,6 +75,9 @@ export class InteractionController {
   private modelDragStartRotation = { x: 0, y: 0, z: 0 };
   private twoHandDrag: TwoHandDragState | null = null;
   private switchHandTransform: SwitchHandTransformState | null = null;
+  private pieceDrag: PieceDragState | null = null;
+  private pieceGrabGroupId: string | null = null;
+  private pieceGrabPreviousFreeTransform: FreeTransform | null = null;
 
   constructor(
     private readonly coordinateMapper: CoordinateMapper,
@@ -89,6 +108,10 @@ export class InteractionController {
     this.allowFloatingVoxels = allow;
   }
 
+  setPieceReleaseMode(mode: PieceReleaseMode): void {
+    this.pieceReleaseMode = mode;
+  }
+
   toggleSegmentMode(): boolean {
     this.selectionController.segmentModeEnabled = !this.selectionController.segmentModeEnabled;
     if (!this.selectionController.segmentModeEnabled) this.selectionController.cancelSegmentAnchor();
@@ -113,7 +136,11 @@ export class InteractionController {
     this.modelDrag = null;
     this.twoHandDrag = null;
     this.switchHandTransform = null;
+    this.pieceDrag = null;
+    this.pieceGrabGroupId = null;
+    this.pieceGrabPreviousFreeTransform = null;
     this.voxelRenderer.clearPreview();
+    this.voxelRenderer.setHeldPiece(null);
     this.lastSeen.clear();
     this.previousGestureType.clear();
     this.lastKnownGesture.clear();
@@ -144,6 +171,9 @@ export class InteractionController {
       case InteractionState.GRABBING_VOXEL:
       case InteractionState.GRABBING_GROUP:
         this.updateVoxelGrab(cursorByHand, nowMs);
+        break;
+      case InteractionState.GRABBING_PIECE:
+        this.updateGrabbingPiece(cursorByHand, handFrameById, nowMs);
         break;
       case InteractionState.MOVING_MODEL:
         this.updateModelMove(cursorByHand, handFrameById, nowMs);
@@ -218,12 +248,33 @@ export class InteractionController {
       }
     }
 
+    // Uma mão fechada (punho) só agarra o modelo inteiro se a outra mão não estiver pinçando —
+    // punho + pinça significa "segure a peça com a pinça", não "mova tudo com o punho".
     const grabHand = gestures.find((g) => g.type === GestureType.GRAB);
-    if (grabHand && this.mode !== 'build') {
+    if (grabHand && this.mode !== 'build' && pinchingHands.length === 0) {
       const handFrame = handFrameById.get(grabHand.handId);
       if (handFrame && this.isNearModel(handFrame)) {
         this.beginModelGrab(grabHand.handId, handFrame, cursorByHand.get(grabHand.handId));
         return;
+      }
+    }
+
+    // Punho fechado + pinça na outra mão: se a pinça mirar um voxel, agarra a peça inteira
+    // (componente conectado) com posição/orientação livres, como se segurasse de verdade.
+    // Sem acerto, cai pro fluxo normal de criação no loop abaixo.
+    if (grabHand && pinchingHands.length === 1 && this.mode !== 'build' && !this.selectionController.segmentModeEnabled) {
+      const pinchGesture = pinchingHands[0];
+      const justStartedPinching = this.previousGestureType.get(pinchGesture.handId) !== GestureType.PINCH;
+      const pinchFrame = handFrameById.get(pinchGesture.handId);
+      const cursor = cursorByHand.get(pinchGesture.handId);
+
+      if (justStartedPinching && pinchFrame && cursor) {
+        const raycaster = this.buildRaycasterToWorldPoint(cursor.worldPos);
+        const hit = this.selectionController.raycastVoxel(raycaster, this.modelGroup);
+        if (hit) {
+          this.beginPieceGrab(pinchGesture.handId, grabHand.handId, hit.id, cursor, pinchFrame);
+          return;
+        }
       }
     }
 
@@ -275,7 +326,7 @@ export class InteractionController {
       this.selectionController.selectSingle(hit.id);
       if (isPartOfSegment && segmentSelection.length > 1) this.selectionController.selectMany(segmentSelection.map((v) => v.id));
 
-      this.voxelDrag = this.transformController.beginVoxelDrag(movingVoxels, cursor.worldPos);
+      this.voxelDrag = this.transformController.beginVoxelDrag(movingVoxels, worldToLocalPoint(this.modelGroup, cursor.worldPos));
       this.ownership = {
         action: movingVoxels.length > 1 ? InteractionState.GRABBING_GROUP : InteractionState.GRABBING_VOXEL,
         primaryHandId: handId,
@@ -286,7 +337,9 @@ export class InteractionController {
 
     if (this.mode === 'edit') return;
 
-    const startCell = this.coordinateMapper.worldToGrid(cursor.worldPos, this.voxelSize);
+    // A ponta da pinça define exatamente onde o bloco nasce — precisa estar no espaço local
+    // do modelo, senão criar depois de mover/girar/escalar a peça desalinha do dedo.
+    const startCell = worldToLocalGrid(this.modelGroup, cursor.worldPos, this.voxelSize);
     this.creationStartCell = startCell;
     this.creationCells = [startCell];
     this.voxelRenderer.setPreview(this.creationCells, this.collidingKeys(this.creationCells));
@@ -302,7 +355,7 @@ export class InteractionController {
       this.lastKnownGesture.get(handId)?.type === GestureType.PINCH && this.isHandActive(handId, nowMs);
 
     if (cursor && stillPinching && this.creationStartCell) {
-      const currentCell = this.coordinateMapper.worldToGrid(cursor.worldPos, this.voxelSize);
+      const currentCell = worldToLocalGrid(this.modelGroup, cursor.worldPos, this.voxelSize);
       this.creationCells = computeCreationLine(this.creationStartCell, currentCell);
       this.voxelRenderer.setPreview(this.creationCells, this.collidingKeys(this.creationCells));
       return;
@@ -361,13 +414,14 @@ export class InteractionController {
       const component = findConnectedComponent(this.grid, this.voxelDrag.targets[0].voxelId);
       if (component.length > 1 && cursor) {
         this.selectionController.selectMany(component.map((v) => v.id));
-        this.voxelDrag = this.transformController.beginVoxelDrag(component, cursor.worldPos);
+        this.voxelDrag = this.transformController.beginVoxelDrag(component, worldToLocalPoint(this.modelGroup, cursor.worldPos));
         this.ownership = { ...this.ownership, action: InteractionState.GRABBING_GROUP };
       }
     }
 
     if (cursor && stillPinching) {
-      this.transformController.updateVoxelDrag(this.voxelDrag, cursor.worldPos, this.voxelSize, this.grid, this.allowFloatingVoxels);
+      const localCursor = worldToLocalPoint(this.modelGroup, cursor.worldPos);
+      this.transformController.updateVoxelDrag(this.voxelDrag, localCursor, this.voxelSize, this.grid, this.allowFloatingVoxels);
       const preview = this.voxelDrag.targets.map((t) => t.proposedCoord);
       const colliding = this.voxelDrag.valid ? new Set<string>() : new Set(preview.map((c) => `${c.x}:${c.y}:${c.z}`));
       this.voxelRenderer.setPreview(preview, colliding);
@@ -393,6 +447,227 @@ export class InteractionController {
     this.voxelRenderer.clearPreview();
     this.voxelDrag = null;
     this.ownership = { ...EMPTY_OWNERSHIP };
+  }
+
+  // ---- SEGURAR PEÇA PELA PONTA (punho fechado + pinça, posição/orientação livres) ----
+
+  private beginPieceGrab(
+    pinchHandId: string,
+    fistHandId: string,
+    anchorVoxelId: string,
+    cursor: HandCursor,
+    pinchFrame: HandFrame,
+  ): void {
+    const anchorVoxel = this.grid.get(anchorVoxelId);
+    if (!anchorVoxel) return;
+
+    const component = findConnectedComponent(this.grid, anchorVoxelId);
+    const anchorCell: GridCoord = { x: anchorVoxel.gridX, y: anchorVoxel.gridY, z: anchorVoxel.gridZ };
+    const anchorBaseLocal = new THREE.Vector3(anchorCell.x * this.voxelSize, anchorCell.y * this.voxelSize, anchorCell.z * this.voxelSize);
+    const modelQuat = new THREE.Quaternion().setFromEuler(
+      new THREE.Euler(this.transform.rotation.x, this.transform.rotation.y, this.transform.rotation.z, 'XYZ'),
+    );
+
+    // Se a peça já estava solta no modo livre, retoma a pose atual dela em vez de saltar pra grade.
+    const previousFreeTransform = this.grid.getFreeTransform(anchorVoxel.groupId) ?? null;
+    let anchorStartWorld: THREE.Vector3;
+    let startQuaternion: THREE.Quaternion;
+
+    if (previousFreeTransform) {
+      this.grid.clearFreeTransform(anchorVoxel.groupId);
+      const anchorLocal = anchorBaseLocal.clone().add(
+        new THREE.Vector3(previousFreeTransform.offset.x, previousFreeTransform.offset.y, previousFreeTransform.offset.z),
+      );
+      anchorStartWorld = this.modelGroup.localToWorld(anchorLocal);
+      const localQuat = new THREE.Quaternion(
+        previousFreeTransform.quaternion.x,
+        previousFreeTransform.quaternion.y,
+        previousFreeTransform.quaternion.z,
+        previousFreeTransform.quaternion.w,
+      );
+      startQuaternion = modelQuat.clone().multiply(localQuat);
+    } else {
+      anchorStartWorld = this.modelGroup.localToWorld(anchorBaseLocal.clone());
+      startQuaternion = new THREE.Quaternion();
+    }
+
+    const groupId = makeGroupId();
+    for (const voxel of component) this.grid.setGroup(voxel.id, groupId);
+    this.selectionController.selectMany(component.map((v) => v.id));
+
+    const targets: PieceDragTarget[] = component.map((v) => ({
+      voxelId: v.id,
+      localOffset: { x: v.gridX - anchorCell.x, y: v.gridY - anchorCell.y, z: v.gridZ - anchorCell.z },
+    }));
+
+    const pinchQuat = this.cursorController.computePalmOrientation(pinchFrame.smoothedLandmarks);
+    this.pieceDrag = this.transformController.beginPieceGrab(targets, anchorCell, anchorStartWorld, startQuaternion, cursor.worldPos, pinchQuat);
+    this.pieceGrabGroupId = groupId;
+    this.pieceGrabPreviousFreeTransform = previousFreeTransform;
+
+    const heldEntries = component.map((v) => {
+      const target = targets.find((t) => t.voxelId === v.id)!;
+      return { id: v.id, localOffset: target.localOffset, color: v.color };
+    });
+    this.voxelRenderer.setHeldPiece(heldEntries);
+    this.voxelRenderer.updateHeldPieceTransform(this.pieceDrag.liveWorldPosition, this.pieceDrag.liveQuaternion);
+
+    this.ownership = { action: InteractionState.GRABBING_PIECE, primaryHandId: pinchHandId, secondaryHandId: fistHandId };
+  }
+
+  private updateGrabbingPiece(
+    cursorByHand: Map<string, HandCursor>,
+    handFrameById: Map<string, HandFrame>,
+    nowMs: number,
+  ): void {
+    const { primaryHandId: pinchHandId, secondaryHandId: fistHandId } = this.ownership;
+    if (!pinchHandId || !fistHandId || !this.pieceDrag) {
+      this.cancelPieceGrab();
+      return;
+    }
+
+    // Mão perdida de vista (fora da janela de graça) cancela sem gravar nada — arraste é só
+    // prévia até soltar. Gesto que mudou com a mão ainda rastreada é que confirma (solta a peça).
+    if (!this.isHandActive(pinchHandId, nowMs) || !this.isHandActive(fistHandId, nowMs)) {
+      this.cancelPieceGrab();
+      return;
+    }
+
+    const pinchType = this.lastKnownGesture.get(pinchHandId)?.type;
+    const fistType = this.lastKnownGesture.get(fistHandId)?.type;
+    const stillActive =
+      pinchType === GestureType.PINCH && (fistType === GestureType.GRAB || fistType === GestureType.CLOSED_FIST);
+
+    if (!stillActive) {
+      this.finalizePieceGrab();
+      return;
+    }
+
+    const cursor = cursorByHand.get(pinchHandId);
+    const pinchFrame = handFrameById.get(pinchHandId);
+    if (cursor && pinchFrame) {
+      const pinchQuat = this.cursorController.computePalmOrientation(pinchFrame.smoothedLandmarks);
+      this.transformController.updatePieceGrab(this.pieceDrag, cursor.worldPos, pinchQuat);
+      this.voxelRenderer.updateHeldPieceTransform(this.pieceDrag.liveWorldPosition, this.pieceDrag.liveQuaternion);
+      this.updatePieceSnapPreview();
+    }
+    // Frame bruto momentaneamente ausente mas mão ainda "ativa" (dentro da graça): não atualiza
+    // este frame, mesma tolerância que updateModelMove já usa.
+  }
+
+  /** Prévia do destino (modo de encaixe 90°): onde a peça encaixaria se fosse solta agora. */
+  private updatePieceSnapPreview(): void {
+    if (!this.pieceDrag) return;
+
+    if (this.pieceReleaseMode !== 'snap') {
+      this.voxelRenderer.clearPreview();
+      return;
+    }
+
+    const snappedRotation = snapToNearestCubeRotation(this.pieceDrag.liveQuaternion);
+    const newAnchorCell = worldToLocalGrid(this.modelGroup, this.pieceDrag.liveWorldPosition, this.voxelSize);
+    const movingIds = new Set(this.pieceDrag.targets.map((t) => t.voxelId));
+
+    const proposedCells: GridCoord[] = [];
+    const validationTargets = this.pieceDrag.targets.map((t) => {
+      const rotatedOffset = rotateGridOffset(t.localOffset, snappedRotation);
+      const proposedCoord: GridCoord = {
+        x: newAnchorCell.x + rotatedOffset.x,
+        y: newAnchorCell.y + rotatedOffset.y,
+        z: newAnchorCell.z + rotatedOffset.z,
+      };
+      proposedCells.push(proposedCoord);
+      return { voxelId: t.voxelId, originalCoord: proposedCoord, proposedCoord };
+    });
+
+    const valid = this.transformController.validateDrag({ targets: validationTargets }, this.grid, movingIds, this.allowFloatingVoxels);
+    const collidingKeys = valid ? new Set<string>() : new Set(proposedCells.map((c) => `${c.x}:${c.y}:${c.z}`));
+    this.voxelRenderer.setPreview(proposedCells, collidingKeys);
+  }
+
+  private cancelPieceGrab(): void {
+    if (this.pieceGrabGroupId && this.pieceGrabPreviousFreeTransform) {
+      this.grid.setFreeTransform(this.pieceGrabGroupId, this.pieceGrabPreviousFreeTransform);
+    }
+    this.voxelRenderer.setHeldPiece(null);
+    this.voxelRenderer.clearPreview();
+    this.pieceDrag = null;
+    this.pieceGrabGroupId = null;
+    this.pieceGrabPreviousFreeTransform = null;
+    this.ownership = { ...EMPTY_OWNERSHIP };
+  }
+
+  private finalizePieceGrab(): void {
+    const drag = this.pieceDrag;
+    const groupId = this.pieceGrabGroupId;
+    this.voxelRenderer.setHeldPiece(null);
+    this.voxelRenderer.clearPreview();
+
+    if (drag && groupId) {
+      if (this.pieceReleaseMode === 'free') {
+        this.commitPieceGrabFree(drag, groupId);
+      } else {
+        this.commitPieceGrabSnap(drag);
+      }
+    }
+
+    this.pieceDrag = null;
+    this.pieceGrabGroupId = null;
+    this.pieceGrabPreviousFreeTransform = null;
+    this.ownership = { ...EMPTY_OWNERSHIP };
+  }
+
+  /** Modo "encaixe 90°": arredonda a rotação pro múltiplo de 90° mais próximo e vira coordenadas de grade inteiras. */
+  private commitPieceGrabSnap(drag: PieceDragState): void {
+    const snappedRotation = snapToNearestCubeRotation(drag.liveQuaternion);
+    const newAnchorCell = worldToLocalGrid(this.modelGroup, drag.liveWorldPosition, this.voxelSize);
+    const movingIds = new Set(drag.targets.map((t) => t.voxelId));
+
+    const proposedTargets = drag.targets.map((t) => {
+      const currentVoxel = this.grid.get(t.voxelId);
+      const originalCoord: GridCoord = currentVoxel
+        ? { x: currentVoxel.gridX, y: currentVoxel.gridY, z: currentVoxel.gridZ }
+        : { x: 0, y: 0, z: 0 };
+      const rotatedOffset = rotateGridOffset(t.localOffset, snappedRotation);
+      const proposedCoord: GridCoord = {
+        x: newAnchorCell.x + rotatedOffset.x,
+        y: newAnchorCell.y + rotatedOffset.y,
+        z: newAnchorCell.z + rotatedOffset.z,
+      };
+      return { voxelId: t.voxelId, originalCoord, proposedCoord };
+    });
+
+    const valid = this.transformController.validateDrag({ targets: proposedTargets }, this.grid, movingIds, this.allowFloatingVoxels);
+    if (!valid) return; // colisão: cancela — a peça nunca saiu da célula original, nada pra desfazer.
+
+    const entries: GroupMoveEntry[] = proposedTargets.map((t) => ({ voxelId: t.voxelId, from: t.originalCoord, to: t.proposedCoord }));
+    const moved = entries.some((e) => e.from.x !== e.to.x || e.from.y !== e.to.y || e.from.z !== e.to.z);
+    if (moved) {
+      this.history.execute(new MoveGroupCommand(this.grid, entries, entries.length > 1 ? 'Girar/mover peça' : 'Mover peça'));
+    }
+  }
+
+  /** Modo "encaixe livre": guarda a orientação/posição contínua exata em que a peça foi solta. */
+  private commitPieceGrabFree(drag: PieceDragState, groupId: string): void {
+    const modelQuat = new THREE.Quaternion().setFromEuler(
+      new THREE.Euler(this.transform.rotation.x, this.transform.rotation.y, this.transform.rotation.z, 'XYZ'),
+    );
+    const anchorBaseLocal = new THREE.Vector3(
+      drag.anchorOriginalCell.x * this.voxelSize,
+      drag.anchorOriginalCell.y * this.voxelSize,
+      drag.anchorOriginalCell.z * this.voxelSize,
+    );
+    const liveLocalPosition = worldToLocalPoint(this.modelGroup, drag.liveWorldPosition);
+    const localOffset = liveLocalPosition.clone().sub(anchorBaseLocal);
+    const localQuat = modelQuat.clone().invert().multiply(drag.liveQuaternion);
+
+    const next: FreeTransform = {
+      anchorCell: { ...drag.anchorOriginalCell },
+      offset: { x: localOffset.x, y: localOffset.y, z: localOffset.z },
+      quaternion: { x: localQuat.x, y: localQuat.y, z: localQuat.z, w: localQuat.w },
+    };
+
+    this.history.execute(new SetFreeTransformCommand(this.grid, groupId, this.pieceGrabPreviousFreeTransform, next));
   }
 
   // ---- MOVER MODELO / rotação com uma mão ----
@@ -648,6 +923,10 @@ export class InteractionController {
         return 'Movendo cubo — segure para agrupar (500ms)';
       case InteractionState.GRABBING_GROUP:
         return 'Movendo grupo conectado';
+      case InteractionState.GRABBING_PIECE:
+        return this.pieceReleaseMode === 'free'
+          ? 'Segurando a peça — solte para deixar no ângulo exato'
+          : 'Segurando a peça — solte para encaixar no grid mais próximo (90°)';
       case InteractionState.MOVING_MODEL:
         return this.modelDragMode === 'rotate' ? 'Rotacionando modelo' : 'Movendo estrutura completa';
       case InteractionState.SCALING_MODEL:
@@ -657,7 +936,7 @@ export class InteractionController {
       case InteractionState.HOVERING:
         return 'Cubo em foco — faça uma pinça para selecionar';
       default:
-        return 'Pinça para criar • Punho para mover tudo • Duas pinças para escalar/girar • Punho fechado + mão aberta: a mão aberta move e gira a peça livremente';
+        return 'Pinça para criar • Punho para mover tudo • Duas pinças para escalar/girar • Punho fechado + mão aberta: move e gira o modelo inteiro • Punho fechado + pinça: segura e gira só a peça pinçada';
     }
   }
 }

@@ -1,4 +1,4 @@
-import type { GridCoord, Voxel } from '../voxels/Voxel';
+import type { FreeTransform, GridCoord, Voxel } from '../voxels/Voxel';
 import type { VoxelGrid } from '../voxels/VoxelGrid';
 import type { ModelTransform } from '../voxels/VoxelSerializer';
 import type { Command } from './Command';
@@ -93,11 +93,35 @@ export class MoveGroupCommand implements Command {
   }
 
   execute(): void {
-    for (const entry of this.entries) this.grid.move(entry.voxelId, entry.to);
+    // moveMany (não grid.move em loop) evita colisão transitória quando o alvo de um voxel do
+    // lote é a célula que outro voxel do MESMO lote ainda ocupa (ex.: deslizar uma fileira).
+    this.grid.moveMany(this.entries.map((e) => ({ id: e.voxelId, target: e.to })));
   }
 
   undo(): void {
-    for (const entry of this.entries) this.grid.move(entry.voxelId, entry.from);
+    this.grid.moveMany(this.entries.map((e) => ({ id: e.voxelId, target: e.from })));
+  }
+}
+
+/** Solta uma peça no modo de encaixe "livre": grava (ou limpa) o transform contínuo do grupo. */
+export class SetFreeTransformCommand implements Command {
+  readonly label = 'Soltar peça (encaixe livre)';
+
+  constructor(
+    private readonly grid: VoxelGrid,
+    private readonly groupId: string,
+    private readonly from: FreeTransform | null,
+    private readonly to: FreeTransform | null,
+  ) {}
+
+  execute(): void {
+    if (this.to) this.grid.setFreeTransform(this.groupId, this.to);
+    else this.grid.clearFreeTransform(this.groupId);
+  }
+
+  undo(): void {
+    if (this.from) this.grid.setFreeTransform(this.groupId, this.from);
+    else this.grid.clearFreeTransform(this.groupId);
   }
 }
 

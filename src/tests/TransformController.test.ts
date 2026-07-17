@@ -149,3 +149,49 @@ describe('TransformController switch-hand transform (fist activates, open hand c
     expect(transform.position.z).toBeCloseTo(0, 5);
   });
 });
+
+describe('TransformController piece grab (segurar peça pela ponta, posição/orientação livres)', () => {
+  it('translates the piece 1:1 with the pinch hand when its orientation stays constant', () => {
+    const controller = new TransformController();
+    const identity = new THREE.Quaternion();
+    const anchorStart = new THREE.Vector3(0, 0, 0);
+    const targets = [{ voxelId: 'a', localOffset: { x: 0, y: 0, z: 0 } }];
+
+    const state = controller.beginPieceGrab(targets, { x: 0, y: 0, z: 0 }, anchorStart, identity, anchorStart, identity);
+    controller.updatePieceGrab(state, new THREE.Vector3(1, 2, 3), identity);
+
+    expect(state.liveWorldPosition.x).toBeCloseTo(1, 5);
+    expect(state.liveWorldPosition.y).toBeCloseTo(2, 5);
+    expect(state.liveWorldPosition.z).toBeCloseTo(3, 5);
+    expect(Math.abs(state.liveQuaternion.dot(identity))).toBeCloseTo(1, 5);
+  });
+
+  it('rotates the piece to follow the pinch hand turning in place, without requiring it to move', () => {
+    const controller = new TransformController();
+    const startQuat = new THREE.Quaternion();
+    const anchorStart = new THREE.Vector3(0, 0, 0);
+    const targets = [{ voxelId: 'a', localOffset: { x: 1, y: 0, z: 0 } }];
+
+    const state = controller.beginPieceGrab(targets, { x: 0, y: 0, z: 0 }, anchorStart, startQuat, anchorStart, startQuat);
+    const turned = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 0, 1), Math.PI / 2);
+    controller.updatePieceGrab(state, anchorStart, turned);
+
+    expect(Math.abs(state.liveQuaternion.dot(turned))).toBeCloseTo(1, 5);
+    expect(state.liveWorldPosition.x).toBeCloseTo(0, 5);
+    expect(state.liveWorldPosition.y).toBeCloseTo(0, 5);
+    expect(state.liveWorldPosition.z).toBeCloseTo(0, 5);
+  });
+
+  it('resumes from an existing (already-free) orientation instead of snapping back to identity', () => {
+    const controller = new TransformController();
+    const existingQuat = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), Math.PI / 4);
+    const anchorStart = new THREE.Vector3(5, 0, 0);
+    const targets = [{ voxelId: 'a', localOffset: { x: 0, y: 0, z: 0 } }];
+
+    const state = controller.beginPieceGrab(targets, { x: 0, y: 0, z: 0 }, anchorStart, existingQuat, anchorStart, new THREE.Quaternion());
+    // A mão ainda não se moveu nem girou desde o início do gesto -> a peça deve continuar exatamente como estava.
+    controller.updatePieceGrab(state, anchorStart, new THREE.Quaternion());
+
+    expect(Math.abs(state.liveQuaternion.dot(existingQuat))).toBeCloseTo(1, 5);
+  });
+});

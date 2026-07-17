@@ -83,10 +83,64 @@ describe('VoxelGrid', () => {
     expect(grid.size).toBe(0);
   });
 
+  it('moveMany shifts a row by one cell without a transient self-collision (A -> B\'s old spot)', () => {
+    const grid = new VoxelGrid();
+    const a = grid.add({ x: 0, y: 0, z: 0 })!;
+    const b = grid.add({ x: 1, y: 0, z: 0 })!;
+
+    // A vai pra onde B estava; B vai pra uma célula livre — moveMany precisa liberar tudo
+    // do índice antes de reinserir, senão A esbarra em B (que ainda não moveu) e falha.
+    grid.moveMany([
+      { id: a.id, target: { x: 1, y: 0, z: 0 } },
+      { id: b.id, target: { x: 2, y: 0, z: 0 } },
+    ]);
+
+    expect(grid.getAt({ x: 1, y: 0, z: 0 })?.id).toBe(a.id);
+    expect(grid.getAt({ x: 2, y: 0, z: 0 })?.id).toBe(b.id);
+    expect(grid.has({ x: 0, y: 0, z: 0 })).toBe(false);
+    expect(grid.size).toBe(2);
+  });
+
   it('bumps version on structural mutation', () => {
     const grid = new VoxelGrid();
     const before = grid.version;
     grid.add({ x: 0, y: 0, z: 0 });
     expect(grid.version).toBeGreaterThan(before);
+  });
+
+  it('stores, retrieves and clears a free transform by groupId', () => {
+    const grid = new VoxelGrid();
+    const transform = { anchorCell: { x: 0, y: 0, z: 0 }, offset: { x: 1, y: 2, z: 3 }, quaternion: { x: 0, y: 0, z: 0, w: 1 } };
+
+    expect(grid.getFreeTransform('grp1')).toBeUndefined();
+    grid.setFreeTransform('grp1', transform);
+    expect(grid.getFreeTransform('grp1')).toEqual(transform);
+    expect(grid.freeTransforms().size).toBe(1);
+
+    grid.clearFreeTransform('grp1');
+    expect(grid.getFreeTransform('grp1')).toBeUndefined();
+    expect(grid.freeTransforms().size).toBe(0);
+  });
+
+  it('clear() also wipes free transforms', () => {
+    const grid = new VoxelGrid();
+    grid.add({ x: 0, y: 0, z: 0 });
+    grid.setFreeTransform('grp1', { anchorCell: { x: 0, y: 0, z: 0 }, offset: { x: 0, y: 0, z: 0 }, quaternion: { x: 0, y: 0, z: 0, w: 1 } });
+
+    grid.clear();
+
+    expect(grid.size).toBe(0);
+    expect(grid.freeTransforms().size).toBe(0);
+  });
+
+  it('clone() copies free transforms independently from the original', () => {
+    const grid = new VoxelGrid();
+    grid.setFreeTransform('grp1', { anchorCell: { x: 0, y: 0, z: 0 }, offset: { x: 1, y: 0, z: 0 }, quaternion: { x: 0, y: 0, z: 0, w: 1 } });
+
+    const copy = grid.clone();
+    copy.setFreeTransform('grp1', { anchorCell: { x: 0, y: 0, z: 0 }, offset: { x: 9, y: 9, z: 9 }, quaternion: { x: 0, y: 0, z: 0, w: 1 } });
+
+    expect(grid.getFreeTransform('grp1')?.offset).toEqual({ x: 1, y: 0, z: 0 });
+    expect(copy.getFreeTransform('grp1')?.offset).toEqual({ x: 9, y: 9, z: 9 });
   });
 });

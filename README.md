@@ -71,6 +71,8 @@ continua 100% funcional apenas com mouse e teclado (ver seção de controles alt
 | Pinça mantida > 500 ms sobre um cubo | Passa a mover todo o componente conectado (grupo) |
 | Indicador apontado | Realça/seleciona o cubo sob o cursor (hover) |
 | Punho fechado (~180 ms) perto do modelo | Move a estrutura inteira (modo automático/construção/edição) ou gira o modelo (modo transformação) |
+| Punho fechado numa mão + mão aberta na outra | A mão aberta move e gira o **modelo inteiro** livremente, 1:1 com a mão; o punho é só a chave liga/desliga |
+| Punho fechado numa mão + pinça sobre um cubo na outra | Agarra a **peça** (componente conectado) pela ponta, com posição e orientação livres — como segurar um objeto de verdade. Peças não conectadas ao cubo pinçado não se movem |
 | Duas mãos em pinça simultânea | Rotaciona (torção) e redimensiona o modelo, ancorado no ponto médio entre as mãos |
 | Mão aberta | Solta/confirma a ação atual, gesto instantâneo (sem atraso de debounce) |
 
@@ -79,6 +81,22 @@ tabela acima. Os modos **construção**, **edição** e **transformação** (sel
 superior direito) restringem o comportamento: construção só cria voxels, edição só
 seleciona/move voxels existentes, transformação faz o punho girar o modelo em vez de
 arrastá-lo.
+
+### Segurar uma peça pela ponta (punho + pinça)
+
+Ao soltar a peça, o botão **"Encaixe: 90°/Livre"** na barra de ferramentas decide o que
+acontece com ela:
+
+- **Encaixe 90°** (padrão): a orientação arredonda pro múltiplo de 90° mais próximo em
+  cada eixo e a peça volta a fazer parte da grade compartilhada — outros blocos continuam
+  encaixando nela normalmente, e undo/redo funciona como qualquer outro movimento.
+- **Encaixe livre**: a peça fica exatamente na posição/ângulo em que foi solta, sem voltar
+  a se alinhar à grade — útil para composições soltas, mas outros blocos não encaixam mais
+  nela de forma limpa depois disso.
+
+Enquanto a peça está sendo segurada, ela é desenhada separada do restante do modelo,
+acompanhando a mão suavemente; no modo de encaixe 90° um contorno tracejado mostra em
+tempo real onde ela encaixaria se fosse solta naquele instante.
 
 ### Seleção de segmento
 
@@ -268,14 +286,14 @@ câmera real, ver `src/tests/fixtures/handPoses.ts`):
   nas configurações do site, ou use "Continuar sem câmera" para o modo mouse.
 - **Câmera em uso por outro app** (`NotReadableError` / "Could not start video source"):
   feche outros aplicativos que estejam usando a webcam (Zoom, Teams, OBS, etc.) e tente
-  novamente. Se o erro persistir mesmo sem nenhum outro app usando a câmera — inclusive
-  numa página HTML mínima fora deste projeto, só com `getUserMedia` — o problema é do
-  Windows, não do app: o serviço **FrameServer** (Servidor de Quadros de Câmera do
-  Windows) trava e passa a bloquear qualquer programa. Solução mais rápida: reiniciar o
-  PC. Sem reiniciar, dê duplo-clique em `scripts/fix-camera.bat` — ele pede elevação
-  (UAC) sozinho e reinicia os serviços `FrameServer`/`FrameServerMonitor`. Se persistir
-  depois disso, verifique antivírus com "proteção de webcam" (Kaspersky, Norton, ESET,
-  etc.) e o driver da câmera no Gerenciador de Dispositivos.
+  novamente. No `.exe` (Electron), o próprio app já reinicia os serviços **FrameServer**
+  e **FrameServerMonitor** (que travam e passam a bloquear qualquer programa) toda vez
+  que é aberto — pedindo elevação (UAC) automaticamente antes de abrir a janela
+  (`electron/main.cjs`, `resetCameraServices`). No navegador (`npm run dev`), esse reset
+  automático não existe: se o erro persistir mesmo sem nenhum outro app usando a câmera,
+  dê duplo-clique em `scripts/fix-camera.bat` (mesmo fix, manual) ou reinicie o PC. Se
+  persistir depois disso, verifique antivírus com "proteção de webcam" (Kaspersky,
+  Norton, ESET, etc.) e o driver da câmera no Gerenciador de Dispositivos.
 - **Mãos não aparecem**: verifique iluminação; o MediaPipe precisa de contraste razoável
   entre a mão e o fundo. O HUD mostra "Mãos: 0" quando nada é detectado.
 - **FPS baixo**: desligue o bloom no botão "Bloom On/Off" ou aguarde a redução automática

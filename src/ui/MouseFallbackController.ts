@@ -9,6 +9,7 @@ import { computeCreationLine } from '../voxels/VoxelBuilder';
 import { DEFAULT_VOXEL_COLOR, type GridCoord } from '../voxels/Voxel';
 import type { SelectionController } from '../interaction/SelectionController';
 import { TransformController, type VoxelDragState } from '../interaction/TransformController';
+import { worldToLocalGrid, worldToLocalPoint } from '../interaction/WorldGridMapping';
 import { clamp } from '../utils/MathUtils';
 
 export interface MouseFallbackCallbacks {
@@ -94,11 +95,11 @@ export class MouseFallbackController {
 
     if (hit) {
       this.selectionController.selectSingle(hit.id);
-      this.voxelDrag = this.transformController.beginVoxelDrag([hit], worldPos);
+      this.voxelDrag = this.transformController.beginVoxelDrag([hit], worldToLocalPoint(this.modelGroup, worldPos));
       return;
     }
 
-    const startCell = this.sceneManager.coordinateMapper.worldToGrid(worldPos, this.currentVoxelSize());
+    const startCell = worldToLocalGrid(this.modelGroup, worldPos, this.currentVoxelSize());
     this.creationStartCell = startCell;
     this.creationCells = [startCell];
     this.voxelRenderer.setPreview(this.creationCells, this.collidingKeys(this.creationCells));
@@ -120,7 +121,8 @@ export class MouseFallbackController {
     const worldPos = this.sceneManager.coordinateMapper.screenToWorld(event.clientX, event.clientY, this.depthWorldZ);
 
     if (this.voxelDrag) {
-      this.transformController.updateVoxelDrag(this.voxelDrag, worldPos, this.currentVoxelSize(), this.grid, true);
+      const localCursor = worldToLocalPoint(this.modelGroup, worldPos);
+      this.transformController.updateVoxelDrag(this.voxelDrag, localCursor, this.currentVoxelSize(), this.grid, true);
       const preview = this.voxelDrag.targets.map((t) => t.proposedCoord);
       const colliding = this.voxelDrag.valid ? new Set<string>() : new Set(preview.map((c) => `${c.x}:${c.y}:${c.z}`));
       this.voxelRenderer.setPreview(preview, colliding);
@@ -128,7 +130,7 @@ export class MouseFallbackController {
     }
 
     if (this.creationStartCell) {
-      const currentCell = this.sceneManager.coordinateMapper.worldToGrid(worldPos, this.currentVoxelSize());
+      const currentCell = worldToLocalGrid(this.modelGroup, worldPos, this.currentVoxelSize());
       this.creationCells = computeCreationLine(this.creationStartCell, currentCell);
       this.voxelRenderer.setPreview(this.creationCells, this.collidingKeys(this.creationCells));
     }

@@ -4,6 +4,7 @@ import {
   makeGroupId,
   makeVoxelId,
   NEIGHBOR_OFFSETS,
+  type FreeTransform,
   type GridCoord,
   type Voxel,
 } from './Voxel';
@@ -18,6 +19,8 @@ export interface AddVoxelOptions {
 export class VoxelGrid {
   private readonly byKey = new Map<string, Voxel>();
   private readonly byId = new Map<string, Voxel>();
+  /** Transform livre (modo "encaixe livre") por groupId — peças fora da grade normal. */
+  private readonly freeTransformsByGroup = new Map<string, FreeTransform>();
   /** Incrementado a cada mutação estrutural, para o renderer pular frames sem mudança. */
   version = 0;
 
@@ -98,11 +101,53 @@ export class VoxelGrid {
     return true;
   }
 
+  /**
+   * Move vários voxels de uma vez, sem colisão transitória entre membros do próprio lote
+   * (ex.: A tenta ir pra célula que B ainda ocupa, antes de B sair de lá). Remove todos do
+   * índice por chave primeiro, depois reinsere nos alvos — assume que o chamador já validou
+   * que o resultado final não colide com nada fora do lote (`MoveGroupCommand` não revalida).
+   */
+  moveMany(entries: { id: string; target: GridCoord }[]): void {
+    const moving: Array<{ voxel: Voxel; target: GridCoord }> = [];
+    for (const entry of entries) {
+      const voxel = this.byId.get(entry.id);
+      if (!voxel) continue;
+      this.byKey.delete(gridKey(voxel.gridX, voxel.gridY, voxel.gridZ));
+      moving.push({ voxel, target: entry.target });
+    }
+
+    for (const { voxel, target } of moving) {
+      voxel.gridX = target.x;
+      voxel.gridY = target.y;
+      voxel.gridZ = target.z;
+      this.byKey.set(gridKey(target.x, target.y, target.z), voxel);
+    }
+
+    this.version++;
+  }
+
   setGroup(id: string, groupId: string): void {
     const voxel = this.byId.get(id);
     if (!voxel) return;
     voxel.groupId = groupId;
     this.version++;
+  }
+
+  setFreeTransform(groupId: string, transform: FreeTransform): void {
+    this.freeTransformsByGroup.set(groupId, transform);
+    this.version++;
+  }
+
+  clearFreeTransform(groupId: string): void {
+    if (this.freeTransformsByGroup.delete(groupId)) this.version++;
+  }
+
+  getFreeTransform(groupId: string): FreeTransform | undefined {
+    return this.freeTransformsByGroup.get(groupId);
+  }
+
+  freeTransforms(): ReadonlyMap<string, FreeTransform> {
+    return this.freeTransformsByGroup;
   }
 
   setSelected(id: string, selected: boolean): void {
@@ -142,9 +187,10 @@ export class VoxelGrid {
   }
 
   clear(): void {
-    if (this.byKey.size === 0) return;
+    if (this.byKey.size === 0 && this.freeTransformsByGroup.size === 0) return;
     this.byKey.clear();
     this.byId.clear();
+    this.freeTransformsByGroup.clear();
     this.version++;
   }
 
@@ -152,6 +198,13 @@ export class VoxelGrid {
     const copy = new VoxelGrid();
     for (const voxel of this.byKey.values()) {
       copy.restore({ ...voxel });
+    }
+    for (const [groupId, transform] of this.freeTransformsByGroup) {
+      copy.setFreeTransform(groupId, {
+        anchorCell: { ...transform.anchorCell },
+        offset: { ...transform.offset },
+        quaternion: { ...transform.quaternion },
+      });
     }
     return copy;
   }

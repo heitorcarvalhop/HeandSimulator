@@ -43,6 +43,31 @@ export interface SwitchHandTransformState {
   startRotation: { x: number; y: number; z: number };
 }
 
+export interface PieceDragTarget {
+  voxelId: string;
+  /** Offset inteiro fixo em relação à célula-âncora original — não muda durante o arraste. */
+  localOffset: GridCoord;
+}
+
+/**
+ * Estado de "segurar uma peça pela ponta": posição e orientação livres (não presas à grade),
+ * atualizadas a cada frame a partir da pinça. Só vira coordenada de grade de novo no commit
+ * (snap de 90° ou transform livre), nunca durante o arraste em si — mesma filosofia de
+ * "arraste é só prévia" do `VoxelDragState`.
+ */
+export interface PieceDragState {
+  targets: PieceDragTarget[];
+  anchorOriginalCell: GridCoord;
+  startHandWorld: THREE.Vector3;
+  startAnchorWorld: THREE.Vector3;
+  /** Inverso da orientação da mão de pinça no início do gesto, para extrair a rotação relativa a cada frame. */
+  startHandQuatInverse: THREE.Quaternion;
+  /** Orientação da peça no início do gesto (identidade, ou a orientação livre que ela já tinha). */
+  startQuaternion: THREE.Quaternion;
+  liveWorldPosition: THREE.Vector3;
+  liveQuaternion: THREE.Quaternion;
+}
+
 /** Matemática de arraste de voxel/grupo/modelo. Arrastes que mudam a grade são só prévia até confirmar. */
 export class TransformController {
   beginVoxelDrag(movingVoxels: Voxel[], startCursorWorld: THREE.Vector3): VoxelDragState {
@@ -96,8 +121,14 @@ export class TransformController {
     return state;
   }
 
-  private validateDrag(
-    state: VoxelDragState,
+  /**
+   * Checa colisão (nenhuma célula proposta duplicada ou ocupada por um voxel de fora do lote)
+   * e, se `allowFloating` for falso, que cada alvo tem suporte (dentro do lote ou fora dele).
+   * Reusado tanto pelo arraste normal (`updateVoxelDrag`) quanto pelo commit de peça segurada
+   * (modo de encaixe 90°) — nesse segundo caso só `targets[].proposedCoord` importa.
+   */
+  validateDrag(
+    state: Pick<VoxelDragState, 'targets'>,
     grid: VoxelGrid,
     movingIds: Set<string>,
     allowFloating: boolean,
@@ -217,6 +248,40 @@ export class TransformController {
     transform.rotation.x = euler.x;
     transform.rotation.y = euler.y;
     transform.rotation.z = euler.z;
+  }
+
+  /**
+   * Inicia "segurar uma peça pela ponta": punho fechado numa mão é a chave liga/desliga (igual
+   * ao switch-hand-transform), a mão que pinçou controla a peça 1:1 — mesma matemática de
+   * `beginSwitchHandTransform`, só que o resultado fica solto num `PieceDragState` (posição e
+   * orientação livres, sem grade) em vez de escrever direto num `ModelTransform`.
+   */
+  beginPieceGrab(
+    targets: PieceDragTarget[],
+    anchorOriginalCell: GridCoord,
+    anchorStartWorld: THREE.Vector3,
+    startQuaternion: THREE.Quaternion,
+    pinchHandWorld: THREE.Vector3,
+    pinchHandQuat: THREE.Quaternion,
+  ): PieceDragState {
+    return {
+      targets,
+      anchorOriginalCell,
+      startHandWorld: pinchHandWorld.clone(),
+      startAnchorWorld: anchorStartWorld.clone(),
+      startHandQuatInverse: pinchHandQuat.clone().invert(),
+      startQuaternion: startQuaternion.clone(),
+      liveWorldPosition: anchorStartWorld.clone(),
+      liveQuaternion: startQuaternion.clone(),
+    };
+  }
+
+  updatePieceGrab(state: PieceDragState, pinchHandWorld: THREE.Vector3, pinchHandQuat: THREE.Quaternion): void {
+    const delta = pinchHandWorld.clone().sub(state.startHandWorld);
+    state.liveWorldPosition.copy(state.startAnchorWorld).add(delta);
+
+    const deltaQuat = pinchHandQuat.clone().multiply(state.startHandQuatInverse);
+    state.liveQuaternion.copy(deltaQuat.multiply(state.startQuaternion));
   }
 
   /** Rotação com uma mão (modo "transformação"): arraste horizontal -> yaw, vertical -> pitch. */

@@ -2,6 +2,7 @@ const { app, BrowserWindow, session } = require('electron');
 const path = require('path');
 const http = require('http');
 const fs = require('fs');
+const { spawn } = require('child_process');
 
 const MIME_TYPES = {
   '.html': 'text/html; charset=utf-8',
@@ -52,6 +53,55 @@ function startStaticServer() {
   });
 }
 
+// Tempo de folga pro usuário reagir ao popup do UAC (clicar "Sim" não é instantâneo).
+const CAMERA_RESET_UAC_TIMEOUT_MS = 20000;
+// O serviço já reporta como reiniciado, mas o driver da câmera ainda leva um instante pra
+// aceitar uma nova sessão — sem essa pausa, o primeiro getUserMedia do renderer pega essa
+// janela e falha com "câmera em uso" mesmo com o FrameServer já de pé.
+const CAMERA_RESET_SETTLE_MS = 1500;
+
+/**
+ * Reinicia FrameServer/FrameServerMonitor (serviço de câmera do Windows que trava e passa a
+ * bloquear qualquer app) toda vez que o programa abre — mesmo fix manual de scripts/fix-camera.bat,
+ * só que automático. Precisa de elevação (UAC); a janela do app fica sem privilégio de admin,
+ * só esse comando isolado eleva. Nunca trava o boot: se o usuário demorar/recusar o UAC, ou o
+ * PowerShell falhar, o app abre normalmente do mesmo jeito depois do timeout.
+ */
+function resetCameraServices() {
+  if (process.platform !== 'win32') return Promise.resolve();
+
+  return new Promise((resolve) => {
+    let settled = false;
+    const finish = () => {
+      if (settled) return;
+      settled = true;
+      setTimeout(resolve, CAMERA_RESET_SETTLE_MS);
+    };
+
+    const innerCommand =
+      'Restart-Service -Name FrameServer -Force -ErrorAction SilentlyContinue; ' +
+      'Restart-Service -Name FrameServerMonitor -Force -ErrorAction SilentlyContinue';
+    // -EncodedCommand evita todo o inferno de aspas aninhadas ao repassar o comando pro processo elevado.
+    const encodedInner = Buffer.from(innerCommand, 'utf16le').toString('base64');
+    const outerCommand = [
+      'Start-Process powershell.exe -Verb RunAs -WindowStyle Hidden -Wait -ArgumentList',
+      `'-NoProfile','-WindowStyle','Hidden','-EncodedCommand','${encodedInner}'`,
+    ].join(' ');
+
+    try {
+      const child = spawn('powershell.exe', ['-NoProfile', '-WindowStyle', 'Hidden', '-Command', outerCommand], {
+        windowsHide: true,
+      });
+      child.on('exit', finish);
+      child.on('error', finish);
+    } catch {
+      finish();
+    }
+
+    setTimeout(finish, CAMERA_RESET_UAC_TIMEOUT_MS);
+  });
+}
+
 let staticServer = null;
 
 async function createWindow() {
@@ -76,13 +126,15 @@ async function createWindow() {
   mainWindow.loadURL(`http://127.0.0.1:${port}`);
 }
 
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
   // Sem essa liberação, o Electron nega getUserMedia por padrão (não existe o popup de
   // permissão do navegador aqui — quem decide é o app). O acesso real à câmera ainda
   // depende da configuração de privacidade do próprio Windows.
   session.defaultSession.setPermissionRequestHandler((_webContents, permission, callback) => {
     callback(permission === 'media');
   });
+
+  await resetCameraServices();
 
   createWindow();
 

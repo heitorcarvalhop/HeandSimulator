@@ -1,4 +1,4 @@
-import type { Voxel } from './Voxel';
+import type { FreeTransform, Voxel } from './Voxel';
 import { VoxelGrid } from './VoxelGrid';
 
 export const SCENE_FORMAT_VERSION = 1;
@@ -18,12 +18,16 @@ export interface ModelTransform {
   scale: number;
 }
 
+/** Como uma peça segurada (punho fechado + pinça) fica ao ser solta. */
+export type PieceReleaseMode = 'snap' | 'free';
+
 export interface SceneSettings {
   voxelSize: number;
   bloomEnabled: boolean;
   sensitivity: number;
   qualityHigh: boolean;
   allowFloatingVoxels: boolean;
+  pieceReleaseMode: PieceReleaseMode;
 }
 
 export interface SerializedScene {
@@ -32,6 +36,8 @@ export interface SerializedScene {
   voxels: SerializedVoxel[];
   model: ModelTransform;
   settings: SceneSettings;
+  /** Peças soltas no modo de encaixe livre, por groupId. */
+  freeTransforms: Record<string, FreeTransform>;
 }
 
 export const DEFAULT_MODEL_TRANSFORM: ModelTransform = {
@@ -46,6 +52,7 @@ export const DEFAULT_SCENE_SETTINGS: SceneSettings = {
   sensitivity: 1,
   qualityHigh: true,
   allowFloatingVoxels: true,
+  pieceReleaseMode: 'snap',
 };
 
 export function serializeScene(
@@ -62,12 +69,18 @@ export function serializeScene(
     color: v.color,
   }));
 
+  const freeTransforms: Record<string, FreeTransform> = {};
+  for (const [groupId, transform] of grid.freeTransforms()) {
+    freeTransforms[groupId] = transform;
+  }
+
   return {
     formatVersion: SCENE_FORMAT_VERSION,
     savedAt: new Date().toISOString(),
     voxels,
     model,
     settings,
+    freeTransforms,
   };
 }
 
@@ -83,6 +96,29 @@ function isVec3Like(value: unknown): value is { x: number; y: number; z: number 
   if (typeof value !== 'object' || value === null) return false;
   const v = value as Record<string, unknown>;
   return isFiniteNumber(v.x) && isFiniteNumber(v.y) && isFiniteNumber(v.z);
+}
+
+function isQuaternionLike(value: unknown): value is { x: number; y: number; z: number; w: number } {
+  if (typeof value !== 'object' || value === null) return false;
+  const v = value as Record<string, unknown>;
+  return isFiniteNumber(v.x) && isFiniteNumber(v.y) && isFiniteNumber(v.z) && isFiniteNumber(v.w);
+}
+
+function isFreeTransform(value: unknown): value is FreeTransform {
+  if (typeof value !== 'object' || value === null) return false;
+  const v = value as Record<string, unknown>;
+  return isVec3Like(v.anchorCell) && isVec3Like(v.offset) && isQuaternionLike(v.quaternion);
+}
+
+/** Lê `raw.freeTransforms`, descartando silenciosamente entradas malformadas em vez de rejeitar a cena inteira. */
+function parseFreeTransforms(value: unknown): Record<string, FreeTransform> {
+  const result: Record<string, FreeTransform> = {};
+  if (typeof value !== 'object' || value === null) return result;
+
+  for (const [groupId, entry] of Object.entries(value as Record<string, unknown>)) {
+    if (isFreeTransform(entry)) result[groupId] = entry;
+  }
+  return result;
 }
 
 function isSerializedVoxel(value: unknown): value is SerializedVoxel {
@@ -142,6 +178,7 @@ export function validateSerializedScene(data: unknown): SceneValidationResult {
       voxels,
       model,
       settings,
+      freeTransforms: parseFreeTransforms(raw.freeTransforms),
     },
   };
 }
@@ -169,5 +206,8 @@ export function loadSceneIntoGrid(scene: SerializedScene, grid: VoxelGrid): void
       selected: false,
     };
     grid.restore(voxel);
+  }
+  for (const [groupId, transform] of Object.entries(scene.freeTransforms ?? {})) {
+    grid.setFreeTransform(groupId, transform);
   }
 }

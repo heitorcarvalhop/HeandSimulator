@@ -1,4 +1,5 @@
 import type { InteractionMode } from '../interaction/InteractionTypes';
+import type { PieceReleaseMode } from '../voxels/VoxelSerializer';
 
 export interface ControlsCallbacks {
   onToggleCamera(): void;
@@ -13,6 +14,7 @@ export interface ControlsCallbacks {
   onToggleDebug(): void;
   onToggleBloom(): void;
   onToggleSegmentMode(): void;
+  onTogglePieceReleaseMode(): void;
   onVoxelSizeChange(size: number): void;
   onSensitivityChange(value: number): void;
   onModeChange(mode: InteractionMode): void;
@@ -45,6 +47,7 @@ export class Controls {
     byId<HTMLButtonElement>('btn-debug').addEventListener('click', () => callbacks.onToggleDebug());
     byId<HTMLButtonElement>('btn-bloom').addEventListener('click', () => callbacks.onToggleBloom());
     byId<HTMLButtonElement>('btn-segment').addEventListener('click', () => callbacks.onToggleSegmentMode());
+    byId<HTMLButtonElement>('btn-piece-release-mode').addEventListener('click', () => callbacks.onTogglePieceReleaseMode());
 
     this.importInput.addEventListener('change', () => {
       const file = this.importInput.files?.[0];
@@ -79,5 +82,11 @@ export class Controls {
 
   setDebugButtonState(enabled: boolean): void {
     byId<HTMLButtonElement>('btn-debug').classList.toggle('active', enabled);
+  }
+
+  setPieceReleaseModeButtonState(mode: PieceReleaseMode): void {
+    const button = byId<HTMLButtonElement>('btn-piece-release-mode');
+    button.textContent = mode === 'free' ? 'Encaixe: Livre' : 'Encaixe: 90°';
+    button.classList.toggle('active', mode === 'free');
   }
 }

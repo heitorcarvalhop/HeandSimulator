@@ -7,6 +7,7 @@ import {
   MoveGroupCommand,
   RemoveVoxelsCommand,
   ScaleModelCommand,
+  SetFreeTransformCommand,
   type GroupMoveEntry,
 } from '../history/VoxelCommands';
 import { VoxelGrid } from '../voxels/VoxelGrid';
@@ -60,6 +61,28 @@ describe('HistoryManager + VoxelCommands', () => {
     expect(grid.getAt({ x: 1, y: 0, z: 0 })?.id).toBe(b.id);
   });
 
+  it('MoveGroupCommand shifts a row by one cell without a transient self-collision, and undo restores it', () => {
+    const grid = new VoxelGrid();
+    const a = grid.add({ x: 0, y: 0, z: 0 })!;
+    const b = grid.add({ x: 1, y: 0, z: 0 })!;
+    const history = new HistoryManager();
+
+    // O alvo de "a" é a célula que "b" ainda ocupa nesse instante — sem moveMany por baixo,
+    // grid.move rejeitaria "a" por colisão transitória com "b" (que ainda não se moveu).
+    const entries: GroupMoveEntry[] = [
+      { voxelId: a.id, from: { x: 0, y: 0, z: 0 }, to: { x: 1, y: 0, z: 0 } },
+      { voxelId: b.id, from: { x: 1, y: 0, z: 0 }, to: { x: 2, y: 0, z: 0 } },
+    ];
+    history.execute(new MoveGroupCommand(grid, entries));
+
+    expect(grid.getAt({ x: 1, y: 0, z: 0 })?.id).toBe(a.id);
+    expect(grid.getAt({ x: 2, y: 0, z: 0 })?.id).toBe(b.id);
+
+    history.undo();
+    expect(grid.getAt({ x: 0, y: 0, z: 0 })?.id).toBe(a.id);
+    expect(grid.getAt({ x: 1, y: 0, z: 0 })?.id).toBe(b.id);
+  });
+
   it('ClearAllCommand snapshot/restore round-trips every voxel', () => {
     const grid = new VoxelGrid();
     grid.add({ x: 0, y: 0, z: 0 }, { color: '#111111' });
@@ -95,6 +118,21 @@ describe('HistoryManager + VoxelCommands', () => {
     history.undo();
     expect(transform.scale).toBe(1);
     expect(history.canUndo).toBe(false);
+  });
+
+  it('SetFreeTransformCommand grants and undo restores the previous (absent) free transform', () => {
+    const grid = new VoxelGrid();
+    const history = new HistoryManager();
+    const transform = { anchorCell: { x: 0, y: 0, z: 0 }, offset: { x: 1, y: 2, z: 3 }, quaternion: { x: 0, y: 0, z: 0, w: 1 } };
+
+    history.execute(new SetFreeTransformCommand(grid, 'grp1', null, transform));
+    expect(grid.getFreeTransform('grp1')).toEqual(transform);
+
+    history.undo();
+    expect(grid.getFreeTransform('grp1')).toBeUndefined();
+
+    history.redo();
+    expect(grid.getFreeTransform('grp1')).toEqual(transform);
   });
 
   it('undo/redo are no-ops on empty stacks', () => {

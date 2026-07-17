@@ -14,6 +14,19 @@ export interface GridCoord {
   z: number;
 }
 
+/**
+ * Transform contínuo (fora da grade) de uma peça no modo de encaixe "livre": um deslocamento
+ * e uma orientação arbitrários, aplicados por cima da posição de grade normal só na
+ * renderização — os voxels do grupo continuam guardando gridX/Y/Z inteiros como identidade.
+ */
+export interface FreeTransform {
+  /** Célula de grade original da âncora (o voxel pinçado) — referência do pivô de rotação. */
+  anchorCell: { x: number; y: number; z: number };
+  /** Deslocamento contínuo (espaço local do modelo) a partir da âncora, por cima do pivô. */
+  offset: { x: number; y: number; z: number };
+  quaternion: { x: number; y: number; z: number; w: number };
+}
+
 export function gridKey(x: number, y: number, z: number): string {
   return `${x}:${y}:${z}`;
 }

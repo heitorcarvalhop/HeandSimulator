@@ -19,6 +19,7 @@ import { Hud, type HudData } from '../ui/Hud';
 import { Controls, type ControlsCallbacks } from '../ui/Controls';
 import { MouseFallbackController } from '../ui/MouseFallbackController';
 import { StorageService } from '../storage/StorageService';
+import type { PieceReleaseMode } from '../voxels/VoxelSerializer';
 import { AppState } from './AppState';
 
 const AUTO_QUALITY_FPS_THRESHOLD = 38;
@@ -129,11 +130,14 @@ export class App {
       onToggleDebug: () => this.toggleDebug(),
       onToggleBloom: () => this.toggleBloom(),
       onToggleSegmentMode: () => this.toggleSegmentMode(),
+      onTogglePieceReleaseMode: () => this.togglePieceReleaseMode(),
       onVoxelSizeChange: (size) => this.setVoxelSize(size),
       onSensitivityChange: (value) => this.setSensitivity(value),
       onModeChange: (mode) => this.interactionController.setMode(mode as InteractionMode),
     };
     this.controls = new Controls(callbacks);
+    this.interactionController.setPieceReleaseMode(this.appState.settings.pieceReleaseMode);
+    this.controls.setPieceReleaseModeButtonState(this.appState.settings.pieceReleaseMode);
 
     this.mouseFallback = new MouseFallbackController(
       this.sceneManager,
@@ -159,11 +163,9 @@ export class App {
     this.errorScreen.classList.add('hidden');
     this.permissionMessageEl.textContent = 'Solicitando acesso à câmera…';
 
-    try {
-      await this.cameraManager.start();
-    } catch (error) {
-      const message = error instanceof CameraError ? error.message : 'Erro desconhecido ao acessar a câmera.';
-      this.showError(message);
+    const cameraError = await this.acquireCameraWithRetry();
+    if (cameraError) {
+      this.showError(cameraError.message);
       return;
     }
 
@@ -188,6 +190,38 @@ export class App {
     this.appState.cameraActive = true;
     this.permissionScreen.classList.add('hidden');
     this.hud.show();
+  }
+
+  /**
+   * O erro "câmera em uso" (NotReadableError/TrackStartError) costuma ser transitório logo
+   * depois que o Windows reinicia o FrameServer (electron/main.cjs): o serviço já reporta
+   * como ativo, mas o driver da câmera ainda leva um instante para aceitar uma nova sessão.
+   * Em vez de obrigar o usuário a clicar em "Tentar novamente" várias vezes, tentamos de
+   * novo automaticamente com espera crescente antes de desistir e mostrar o erro. Outros
+   * motivos (permissão negada, câmera inexistente) falham na hora, sem retry.
+   */
+  private async acquireCameraWithRetry(): Promise<CameraError | null> {
+    const maxAttempts = 20;
+    // Cresce até um teto de 2s por tentativa — 20 tentativas ficam por volta de 35s no pior caso.
+    const retryDelayMs = (attempt: number) => Math.min(500 + attempt * 200, 2000);
+
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      try {
+        await this.cameraManager.start();
+        return null;
+      } catch (error) {
+        const cameraError =
+          error instanceof CameraError ? error : new CameraError('unknown', 'Erro desconhecido ao acessar a câmera.');
+
+        const canRetry = cameraError.reason === 'in-use' && attempt < maxAttempts;
+        if (!canRetry) return cameraError;
+
+        this.permissionMessageEl.textContent = `Câmera ainda inicializando, tentando de novo (${attempt}/${maxAttempts})…`;
+        await new Promise((resolve) => setTimeout(resolve, retryDelayMs(attempt)));
+      }
+    }
+
+    return null;
   }
 
   private continueWithoutCamera(): void {
@@ -245,6 +279,8 @@ export class App {
     this.appState.applyTransform(result.scene.model);
     this.appState.settings = result.scene.settings;
     this.setVoxelSize(result.scene.settings.voxelSize);
+    this.interactionController.setPieceReleaseMode(result.scene.settings.pieceReleaseMode);
+    this.controls.setPieceReleaseModeButtonState(result.scene.settings.pieceReleaseMode);
     this.flashHint('Cena carregada');
   }
 
@@ -270,6 +306,8 @@ export class App {
     this.appState.applyTransform(result.scene.model);
     this.appState.settings = result.scene.settings;
     this.setVoxelSize(result.scene.settings.voxelSize);
+    this.interactionController.setPieceReleaseMode(result.scene.settings.pieceReleaseMode);
+    this.controls.setPieceReleaseModeButtonState(result.scene.settings.pieceReleaseMode);
     this.flashHint('Cena importada com sucesso');
   }
 
@@ -287,6 +325,13 @@ export class App {
   private toggleSegmentMode(): void {
     const enabled = this.interactionController.toggleSegmentMode();
     this.controls.setSegmentButtonState(enabled);
+  }
+
+  private togglePieceReleaseMode(): void {
+    const mode: PieceReleaseMode = this.appState.settings.pieceReleaseMode === 'free' ? 'snap' : 'free';
+    this.appState.settings.pieceReleaseMode = mode;
+    this.interactionController.setPieceReleaseMode(mode);
+    this.controls.setPieceReleaseModeButtonState(mode);
   }
 
   private setVoxelSize(size: number): void {

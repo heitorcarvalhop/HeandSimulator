@@ -73,7 +73,7 @@ export class CursorController {
 
     const up = middleMcp.clone().sub(wrist).normalize();
     const across = pinkyMcp.clone().sub(indexMcp).normalize();
-    let normal = new THREE.Vector3().crossVectors(across, up);
+    const normal = new THREE.Vector3().crossVectors(across, up);
     if (normal.lengthSq() < 1e-8) normal.set(0, 0, 1);
     normal.normalize();
     const orthogonalAcross = new THREE.Vector3().crossVectors(up, normal).normalize();
