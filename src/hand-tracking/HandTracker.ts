@@ -2,9 +2,10 @@ import { FilesetResolver, HandLandmarker } from '@mediapipe/tasks-vision';
 import type { HandFrame, HandTrackingResult, Handedness, Landmark } from './HandTypes';
 import { LandmarkSmoother } from './LandmarkSmoother';
 
-const WASM_BASE_URL = 'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.17/wasm';
-const MODEL_ASSET_URL =
-  'https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task';
+// Arquivos do MediaPipe embutidos localmente (public/mediapipe) em vez de baixados de um CDN,
+// para o app funcionar 100% offline (essencial no build empacotado como .exe).
+const WASM_BASE_URL = './mediapipe/wasm';
+const MODEL_ASSET_URL = './mediapipe/hand_landmarker.task';
 
 export class HandTrackerInitError extends Error {}
 

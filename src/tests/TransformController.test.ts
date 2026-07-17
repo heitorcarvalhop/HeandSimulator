@@ -110,3 +110,42 @@ describe('TransformController two-hand scale + rotate', () => {
     expect(transform.scale).toBeLessThanOrEqual(3.0);
   });
 });
+
+describe('TransformController switch-hand transform (fist activates, open hand controls)', () => {
+  it('translates the model 1:1 with the open hand when its orientation stays constant', () => {
+    const transform = { position: { x: 0, y: 0, z: 0 }, rotation: { x: 0, y: 0, z: 0 }, scale: 1 };
+    const controller = new TransformController();
+    const identity = new THREE.Quaternion();
+    const startWorld = new THREE.Vector3(0, 0, 0);
+
+    const state = controller.beginSwitchHandTransform(startWorld, identity, transform);
+    controller.updateSwitchHandTransform(state, new THREE.Vector3(1, 2, 3), identity, transform);
+
+    expect(transform.position.x).toBeCloseTo(1, 5);
+    expect(transform.position.y).toBeCloseTo(2, 5);
+    expect(transform.position.z).toBeCloseTo(3, 5);
+    expect(transform.rotation.x).toBeCloseTo(0, 5);
+    expect(transform.rotation.y).toBeCloseTo(0, 5);
+    expect(transform.rotation.z).toBeCloseTo(0, 5);
+    expect(transform.scale).toBe(1);
+  });
+
+  it('rotates the model to follow the open hand turning in place, without requiring it to move', () => {
+    const transform = { position: { x: 0, y: 0, z: 0 }, rotation: { x: 0, y: 0, z: 0 }, scale: 1 };
+    const controller = new TransformController();
+    const startWorld = new THREE.Vector3(0, 0, 0);
+    const startQuat = new THREE.Quaternion();
+
+    const state = controller.beginSwitchHandTransform(startWorld, startQuat, transform);
+    // Hand stays in the same place but turns 90° around Z.
+    const turned = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 0, 1), Math.PI / 2);
+    controller.updateSwitchHandTransform(state, startWorld, turned, transform);
+
+    expect(transform.rotation.z).toBeCloseTo(Math.PI / 2, 5);
+    expect(transform.rotation.x).toBeCloseTo(0, 5);
+    expect(transform.rotation.y).toBeCloseTo(0, 5);
+    expect(transform.position.x).toBeCloseTo(0, 5);
+    expect(transform.position.y).toBeCloseTo(0, 5);
+    expect(transform.position.z).toBeCloseTo(0, 5);
+  });
+});

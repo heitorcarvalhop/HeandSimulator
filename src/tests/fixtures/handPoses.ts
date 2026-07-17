@@ -102,6 +102,23 @@ export function closedFistLandmarks(): Landmark[] {
   });
 }
 
+/**
+ * Punho fechado (como closedFistLandmarks) mas com o polegar encostado bem perto da ponta do
+ * indicador recolhido — caso real e ambíguo: a distância polegar-indicador sozinha bateria o
+ * limiar de pinça, mas a pose ainda é claramente um punho fechado e deve vencer.
+ */
+export function tightFistLandmarks(): Landmark[] {
+  return buildLandmarks({
+    wrist: WRIST,
+    thumbMcp: MCPS.thumb,
+    thumbTip: { x: 0.455, y: 0.615, z: 0 },
+    index: { mcp: MCPS.index, tip: { x: 0.46, y: 0.62, z: 0 } },
+    middle: { mcp: MCPS.middle, tip: { x: 0.5, y: 0.6, z: 0 } },
+    ring: { mcp: MCPS.ring, tip: { x: 0.54, y: 0.62, z: 0 } },
+    pinky: { mcp: MCPS.pinky, tip: { x: 0.59, y: 0.64, z: 0 } },
+  });
+}
+
 /** Indicador estendido e os outros três recolhidos — deve reconhecer como POINTING. */
 export function pointingLandmarks(): Landmark[] {
   return buildLandmarks({

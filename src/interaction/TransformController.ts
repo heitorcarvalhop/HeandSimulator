@@ -34,6 +34,15 @@ export interface TwoHandDragState {
   anchorPosition: { x: number; y: number; z: number };
 }
 
+export interface SwitchHandTransformState {
+  startHandWorld: THREE.Vector3;
+  startPosition: { x: number; y: number; z: number };
+  /** Inverso da orientação da mão aberta no início do gesto, para extrair a rotação relativa a cada frame. */
+  startHandQuatInverse: THREE.Quaternion;
+  startModelQuaternion: THREE.Quaternion;
+  startRotation: { x: number; y: number; z: number };
+}
+
 /** Matemática de arraste de voxel/grupo/modelo. Arrastes que mudam a grade são só prévia até confirmar. */
 export class TransformController {
   beginVoxelDrag(movingVoxels: Voxel[], startCursorWorld: THREE.Vector3): VoxelDragState {
@@ -167,6 +176,47 @@ export class TransformController {
     transform.position.x = state.anchorWorld.x + (state.anchorPosition.x - state.anchorWorld.x) * scaleFactor;
     transform.position.y = state.anchorWorld.y + (state.anchorPosition.y - state.anchorWorld.y) * scaleFactor;
     transform.position.z = state.anchorWorld.z + (state.anchorPosition.z - state.anchorWorld.z) * scaleFactor;
+  }
+
+  /**
+   * Inicia o gesto "punho fechado + mão aberta": o punho é só a chave liga/desliga do comando
+   * (não precisa se mexer nem influencia o resultado); a mão aberta controla a peça inteira 1:1 —
+   * sua translação move a peça e sua própria orientação (giro do pulso/palma) gira a peça em 3D.
+   */
+  beginSwitchHandTransform(
+    openHandWorld: THREE.Vector3,
+    openHandQuat: THREE.Quaternion,
+    transform: ModelTransform,
+  ): SwitchHandTransformState {
+    return {
+      startHandWorld: openHandWorld.clone(),
+      startPosition: { ...transform.position },
+      startHandQuatInverse: openHandQuat.clone().invert(),
+      startModelQuaternion: new THREE.Quaternion().setFromEuler(
+        new THREE.Euler(transform.rotation.x, transform.rotation.y, transform.rotation.z, 'XYZ'),
+      ),
+      startRotation: { ...transform.rotation },
+    };
+  }
+
+  updateSwitchHandTransform(
+    state: SwitchHandTransformState,
+    openHandWorld: THREE.Vector3,
+    openHandQuat: THREE.Quaternion,
+    transform: ModelTransform,
+  ): void {
+    const delta = openHandWorld.clone().sub(state.startHandWorld);
+    transform.position.x = state.startPosition.x + delta.x;
+    transform.position.y = state.startPosition.y + delta.y;
+    transform.position.z = state.startPosition.z + delta.z;
+
+    // Quanto a mão girou desde o início, composto por cima da orientação inicial do modelo.
+    const deltaQuat = openHandQuat.clone().multiply(state.startHandQuatInverse);
+    const newQuat = deltaQuat.multiply(state.startModelQuaternion);
+    const euler = new THREE.Euler().setFromQuaternion(newQuat, 'XYZ');
+    transform.rotation.x = euler.x;
+    transform.rotation.y = euler.y;
+    transform.rotation.z = euler.z;
   }
 
   /** Rotação com uma mão (modo "transformação"): arraste horizontal -> yaw, vertical -> pitch. */

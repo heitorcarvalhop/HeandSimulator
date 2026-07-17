@@ -124,24 +124,28 @@ export class GestureRecognizer {
     const landmarks = hand.smoothedLandmarks;
     const palmSize = computePalmSize(landmarks);
     const normalizedPinch = computeNormalizedPinchDistance(landmarks);
+    const fist = isClosedFistPose(landmarks);
 
-    const pinchState = this.updatePinchState(hand.handId, normalizedPinch, nowMs);
+    // Punho fechado tem prioridade sobre pinça: ao cerrar a mão o polegar costuma encostar perto do
+    // indicador recolhido, o que bateria o limiar de distância da pinça se não fosse essa checagem.
+    const pinchState = this.updatePinchState(hand.handId, normalizedPinch, nowMs, fist);
     const pinchStrength = 1 - Math.min(normalizedPinch / this.pinchConfig.endThreshold, 1);
 
     const openPalm = isOpenPalmPose(landmarks);
-    const fist = isClosedFistPose(landmarks);
-    const pointing = isPointingPose(landmarks) && !pinchState.confirmed;
-    const twoFingerPinch = isTwoFingerPinchPose(landmarks) && !pinchState.confirmed;
+    const pointing = !fist && isPointingPose(landmarks) && !pinchState.confirmed;
+    const twoFingerPinch = !fist && isTwoFingerPinchPose(landmarks) && !pinchState.confirmed;
 
     const pinchMidpoint = pinchState.confirmed
       ? midpoint(landmarks[LandmarkIndex.THUMB_TIP], landmarks[LandmarkIndex.INDEX_FINGER_TIP])
       : null;
 
+    // Punho fechado vence qualquer leitura de dedos próximos ao polegar (pinça/pinça-de-dois-dedos),
+    // já que ao cerrar a mão essas distâncias naturalmente ficam pequenas.
     let type = GestureType.NONE;
-    if (pinchState.confirmed) type = GestureType.PINCH;
+    if (fist) type = GestureType.CLOSED_FIST;
+    else if (pinchState.confirmed) type = GestureType.PINCH;
     else if (twoFingerPinch) type = GestureType.TWO_FINGER_PINCH;
     else if (pointing) type = GestureType.POINTING;
-    else if (fist) type = GestureType.CLOSED_FIST;
     else if (openPalm) type = GestureType.OPEN_PALM;
 
     return {
@@ -160,11 +164,23 @@ export class GestureRecognizer {
     };
   }
 
-  private updatePinchState(handId: string, normalizedDistance: number, nowMs: number): PinchTrackState {
+  private updatePinchState(handId: string, normalizedDistance: number, nowMs: number, isFist: boolean): PinchTrackState {
     let state = this.pinchStates.get(handId);
     if (!state) {
       state = { isPinching: false, confirmed: false, lastToggleTime: -Infinity, pinchStartTime: null };
       this.pinchStates.set(handId, state);
+    }
+
+    if (isFist) {
+      // Mão claramente fechada: derruba qualquer pinça em andamento, sem esperar o debounce
+      // normal — não existe ambiguidade real de intenção aqui, então a leitura da pose vence.
+      if (state.isPinching || state.confirmed) {
+        state.isPinching = false;
+        state.confirmed = false;
+        state.lastToggleTime = nowMs;
+        state.pinchStartTime = null;
+      }
+      return state;
     }
 
     const { startThreshold, endThreshold, debounceMs, minActivationMs } = this.pinchConfig;

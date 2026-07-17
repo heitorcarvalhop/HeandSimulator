@@ -13,7 +13,13 @@ import type { Command } from '../history/Command';
 import { AddVoxelsCommand, CompositeCommand, MoveGroupCommand, RemoveVoxelsCommand, RotateModelCommand, ScaleModelCommand, MoveModelCommand, type GroupMoveEntry, type NewVoxelSpec } from '../history/VoxelCommands';
 import { CursorController, type HandCursor } from './CursorController';
 import { SelectionController } from './SelectionController';
-import { TransformController, type ModelDragState, type TwoHandDragState, type VoxelDragState } from './TransformController';
+import {
+  TransformController,
+  type ModelDragState,
+  type SwitchHandTransformState,
+  type TwoHandDragState,
+  type VoxelDragState,
+} from './TransformController';
 import { EMPTY_OWNERSHIP, InteractionState, type InteractionMode, type InteractionOwnership } from './InteractionTypes';
 
 const GROUP_UPGRADE_MS = 500;
@@ -52,6 +58,7 @@ export class InteractionController {
   private modelDragMode: 'translate' | 'rotate' = 'translate';
   private modelDragStartRotation = { x: 0, y: 0, z: 0 };
   private twoHandDrag: TwoHandDragState | null = null;
+  private switchHandTransform: SwitchHandTransformState | null = null;
 
   constructor(
     private readonly coordinateMapper: CoordinateMapper,
@@ -105,6 +112,7 @@ export class InteractionController {
     this.voxelDrag = null;
     this.modelDrag = null;
     this.twoHandDrag = null;
+    this.switchHandTransform = null;
     this.voxelRenderer.clearPreview();
     this.lastSeen.clear();
     this.previousGestureType.clear();
@@ -141,6 +149,8 @@ export class InteractionController {
         this.updateModelMove(cursorByHand, handFrameById, nowMs);
         break;
       case InteractionState.ROTATING_MODEL:
+        this.updateSwitchHandTransform(handFrameById, nowMs);
+        break;
       case InteractionState.SCALING_MODEL:
         this.updateTwoHandTransform(cursorByHand, nowMs);
         break;
@@ -187,6 +197,15 @@ export class InteractionController {
     handFrameById: Map<string, HandFrame>,
     cursorByHand: Map<string, HandCursor>,
   ): void {
+    const orientPair = this.findFistAndOpenPalmPair(gestures);
+    if (orientPair && this.mode !== 'build') {
+      const openFrame = handFrameById.get(orientPair.openId);
+      if (openFrame) {
+        this.beginSwitchHandTransform(orientPair.fistId, orientPair.openId, openFrame);
+        return;
+      }
+    }
+
     const pinchingHands = gestures.filter((g) => g.type === GestureType.PINCH);
 
     if (pinchingHands.length >= 2 && this.mode !== 'build' && this.mode !== 'edit') {
@@ -469,6 +488,79 @@ export class InteractionController {
     this.ownership = { ...EMPTY_OWNERSHIP };
   }
 
+  // ---- MÃO ABERTA CONTROLA A PEÇA, PUNHO É SÓ A CHAVE LIGA/DESLIGA ----
+
+  private findFistAndOpenPalmPair(gestures: StableGesture[]): { fistId: string; openId: string } | null {
+    const fist = gestures.find((g) => g.type === GestureType.GRAB);
+    const open = gestures.find((g) => g.type === GestureType.OPEN_PALM);
+    if (!fist || !open || fist.handId === open.handId) return null;
+    return { fistId: fist.handId, openId: open.handId };
+  }
+
+  private beginSwitchHandTransform(fistId: string, openId: string, openFrame: HandFrame): void {
+    const openWorld = this.cursorController.computePalmWorldPos(openFrame.smoothedLandmarks);
+    const openQuat = this.cursorController.computePalmOrientation(openFrame.smoothedLandmarks);
+    this.switchHandTransform = this.transformController.beginSwitchHandTransform(openWorld, openQuat, this.transform);
+    this.ownership = { action: InteractionState.ROTATING_MODEL, primaryHandId: fistId, secondaryHandId: openId };
+  }
+
+  private updateSwitchHandTransform(handFrameById: Map<string, HandFrame>, nowMs: number): void {
+    const { primaryHandId, secondaryHandId } = this.ownership;
+    if (!primaryHandId || !secondaryHandId || !this.switchHandTransform) {
+      this.ownership = { ...EMPTY_OWNERSHIP };
+      return;
+    }
+
+    // O punho (primaryHandId) só precisa continuar fechado e visível — ele é a chave.
+    // A mão aberta (secondaryHandId) controla a peça, não importa o gesto que ela esteja fazendo.
+    const fistType = this.lastKnownGesture.get(primaryHandId)?.type;
+    const stillActive =
+      (fistType === GestureType.GRAB || fistType === GestureType.CLOSED_FIST) &&
+      this.isHandActive(primaryHandId, nowMs) &&
+      this.isHandActive(secondaryHandId, nowMs);
+
+    const openFrame = handFrameById.get(secondaryHandId);
+
+    if (stillActive && openFrame) {
+      const openWorld = this.cursorController.computePalmWorldPos(openFrame.smoothedLandmarks);
+      const openQuat = this.cursorController.computePalmOrientation(openFrame.smoothedLandmarks);
+      this.transformController.updateSwitchHandTransform(this.switchHandTransform, openWorld, openQuat, this.transform);
+      return;
+    }
+
+    this.finalizeSwitchHandTransform();
+  }
+
+  private finalizeSwitchHandTransform(): void {
+    if (this.switchHandTransform) {
+      const commands: Command[] = [];
+      const fromRot = this.switchHandTransform.startRotation;
+      const toRot = { ...this.transform.rotation };
+      const fromPos = this.switchHandTransform.startPosition;
+      const toPos = { ...this.transform.position };
+
+      if (fromRot.x !== toRot.x || fromRot.y !== toRot.y || fromRot.z !== toRot.z) {
+        this.transform.rotation.x = fromRot.x;
+        this.transform.rotation.y = fromRot.y;
+        this.transform.rotation.z = fromRot.z;
+        commands.push(new RotateModelCommand(this.transform, fromRot, toRot));
+      }
+      if (fromPos.x !== toPos.x || fromPos.y !== toPos.y || fromPos.z !== toPos.z) {
+        this.transform.position.x = fromPos.x;
+        this.transform.position.y = fromPos.y;
+        this.transform.position.z = fromPos.z;
+        commands.push(new MoveModelCommand(this.transform, fromPos, toPos));
+      }
+
+      if (commands.length > 0) {
+        this.history.execute(new CompositeCommand(commands, 'Girar e mover modelo'));
+      }
+    }
+
+    this.switchHandTransform = null;
+    this.ownership = { ...EMPTY_OWNERSHIP };
+  }
+
   // ---- ROTAÇÃO / ESCALA COM DUAS MÃOS ----
 
   private beginTwoHandTransform(handA: string, handB: string, worldA: THREE.Vector3, worldB: THREE.Vector3): void {
@@ -559,12 +651,13 @@ export class InteractionController {
       case InteractionState.MOVING_MODEL:
         return this.modelDragMode === 'rotate' ? 'Rotacionando modelo' : 'Movendo estrutura completa';
       case InteractionState.SCALING_MODEL:
-      case InteractionState.ROTATING_MODEL:
         return 'Rotacionando e redimensionando com duas mãos';
+      case InteractionState.ROTATING_MODEL:
+        return 'Mão aberta controla a peça — punho fechado mantém o comando ativo';
       case InteractionState.HOVERING:
         return 'Cubo em foco — faça uma pinça para selecionar';
       default:
-        return 'Pinça para criar • Punho para mover tudo • Duas pinças para girar/escalar';
+        return 'Pinça para criar • Punho para mover tudo • Duas pinças para escalar/girar • Punho fechado + mão aberta: a mão aberta move e gira a peça livremente';
     }
   }
 }

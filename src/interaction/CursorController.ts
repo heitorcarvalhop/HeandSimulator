@@ -60,4 +60,25 @@ export class CursorController {
     };
     return this.coordinateMapper.landmarkToWorld(mid);
   }
+
+  /**
+   * Orientação (quaternion) da palma no espaço de mundo, a partir do plano formado pelo
+   * pulso e os nós dos dedos indicador/mindinho. Usada para girar o modelo 1:1 com o giro da mão.
+   */
+  computePalmOrientation(rawLandmarks: { x: number; y: number; z: number }[]): THREE.Quaternion {
+    const wrist = this.coordinateMapper.landmarkToWorld(rawLandmarks[LandmarkIndex.WRIST]);
+    const middleMcp = this.coordinateMapper.landmarkToWorld(rawLandmarks[LandmarkIndex.MIDDLE_FINGER_MCP]);
+    const indexMcp = this.coordinateMapper.landmarkToWorld(rawLandmarks[LandmarkIndex.INDEX_FINGER_MCP]);
+    const pinkyMcp = this.coordinateMapper.landmarkToWorld(rawLandmarks[LandmarkIndex.PINKY_MCP]);
+
+    const up = middleMcp.clone().sub(wrist).normalize();
+    const across = pinkyMcp.clone().sub(indexMcp).normalize();
+    let normal = new THREE.Vector3().crossVectors(across, up);
+    if (normal.lengthSq() < 1e-8) normal.set(0, 0, 1);
+    normal.normalize();
+    const orthogonalAcross = new THREE.Vector3().crossVectors(up, normal).normalize();
+
+    const basis = new THREE.Matrix4().makeBasis(orthogonalAcross, up, normal);
+    return new THREE.Quaternion().setFromRotationMatrix(basis);
+  }
 }

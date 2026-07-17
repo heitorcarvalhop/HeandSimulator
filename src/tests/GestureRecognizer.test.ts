@@ -8,7 +8,13 @@ import {
   isPointingPose,
 } from '../hand-tracking/GestureRecognizer';
 import { GestureType, type HandFrame } from '../hand-tracking/HandTypes';
-import { closedFistLandmarks, openPalmLandmarks, pinchLandmarks, pointingLandmarks } from './fixtures/handPoses';
+import {
+  closedFistLandmarks,
+  openPalmLandmarks,
+  pinchLandmarks,
+  pointingLandmarks,
+  tightFistLandmarks,
+} from './fixtures/handPoses';
 
 function makeHandFrame(landmarks: ReturnType<typeof openPalmLandmarks>, handId = 'right'): HandFrame {
   return {
@@ -76,6 +82,39 @@ describe('GestureRecognizer.recognize', () => {
     const recognizer = new GestureRecognizer();
     const result = recognizer.recognize(makeHandFrame(closedFistLandmarks()), 0);
     expect(result.type).toBe(GestureType.CLOSED_FIST);
+  });
+
+  it('classifies a closed fist as CLOSED_FIST even when the thumb ends up very close to the curled index (real-world ambiguity with pinch)', () => {
+    const recognizer = new GestureRecognizer();
+    const landmarks = tightFistLandmarks();
+    // Confirms the fixture really would trip the pinch distance threshold on its own.
+    expect(computeNormalizedPinchDistance(landmarks)).toBeLessThan(0.38);
+
+    const result = recognizer.recognize(makeHandFrame(landmarks), 0);
+    expect(result.type).toBe(GestureType.CLOSED_FIST);
+    expect(result.isPinching).toBe(false);
+    expect(result.pinchMidpoint).toBeNull();
+  });
+
+  it('never lets a held fist confirm into a pinch over time', () => {
+    const recognizer = new GestureRecognizer({ minActivationMs: 0, debounceMs: 0 });
+    const landmarks = tightFistLandmarks();
+    const frame = makeHandFrame(landmarks);
+    recognizer.recognize(frame, 0);
+    const result = recognizer.recognize(frame, 200);
+    expect(result.type).toBe(GestureType.CLOSED_FIST);
+    expect(recognizer.isPinchConfirmed('right')).toBe(false);
+  });
+
+  it('drops an in-progress pinch as soon as the hand closes into a fist', () => {
+    const recognizer = new GestureRecognizer({ minActivationMs: 0, debounceMs: 0 });
+    recognizer.recognize(makeHandFrame(pinchLandmarks()), 0);
+    expect(recognizer.isPinchConfirmed('right')).toBe(true);
+
+    const result = recognizer.recognize(makeHandFrame(closedFistLandmarks()), 10);
+    expect(result.type).toBe(GestureType.CLOSED_FIST);
+    expect(result.isPinching).toBe(false);
+    expect(recognizer.isPinchConfirmed('right')).toBe(false);
   });
 
   it('classifies a pointing frame as POINTING', () => {

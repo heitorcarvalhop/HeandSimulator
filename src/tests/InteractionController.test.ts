@@ -80,6 +80,37 @@ function makeHandFrame(handId: string): HandFrame {
   };
 }
 
+function closedFistGestureResult(handId: string): GestureResult {
+  return {
+    type: GestureType.CLOSED_FIST,
+    intensity: 1,
+    pinchStrength: 0,
+    isPinching: false,
+    pinchMidpoint: null,
+    isPointing: false,
+    pointingTip: null,
+    isFist: true,
+    isOpenPalm: false,
+    palmSize: 0.2,
+    handId,
+    handedness: 'Left',
+  };
+}
+
+/** Mão sintética: só o punho e o MCP médio importam para o calculo da posição de mundo da palma. */
+function makeHandFrameAt(handId: string, point: Landmark): HandFrame {
+  const landmarks = new Array(21).fill(point) as Landmark[];
+  return {
+    handId,
+    handedness: 'Left',
+    confidence: 0.9,
+    rawLandmarks: landmarks,
+    landmarks,
+    smoothedLandmarks: landmarks,
+    timestampMs: 0,
+  };
+}
+
 describe('InteractionController creation flow (real gesture -> real voxels)', () => {
   it('creates a line of voxels by holding a pinch in empty space and dragging, then releases on open palm', () => {
     const { controller, grid, history } = setupController();
@@ -144,5 +175,37 @@ describe('InteractionController creation flow (real gesture -> real voxels)', ()
     frame = controller.update(stable, hands, 50);
     expect(frame.state).toBe(InteractionState.IDLE);
     expect(grid.size).toBe(1);
+  });
+});
+
+describe('InteractionController two-hand orient (fist + open palm)', () => {
+  it('enters ROTATING_MODEL once the fist hand is held long enough while the other hand is open, then commits the move+rotate to history on release', () => {
+    const { controller, history } = setupController();
+    const stateMachine = new GestureStateMachine();
+    const fistId = 'left';
+    const openId = 'right';
+
+    const fistAt = (x: number) => makeHandFrameAt(fistId, { x, y: 0, z: 0 });
+    const openAt = (x: number) => makeHandFrameAt(openId, { x, y: 0, z: 0 });
+
+    // Segura o punho por tempo suficiente (>180ms) para virar GRAB, com a outra mão já aberta.
+    stateMachine.update([closedFistGestureResult(fistId), openPalmGestureResult(openId)], 0);
+    let stable = stateMachine.update(
+      [closedFistGestureResult(fistId), openPalmGestureResult(openId)],
+      300,
+    );
+    let frame = controller.update(stable, [fistAt(-1), openAt(1)], 300);
+    expect(frame.state).toBe(InteractionState.ROTATING_MODEL);
+
+    // Move as duas mãos juntas para a direita -> o modelo deve acompanhar a translação.
+    stable = stateMachine.update([closedFistGestureResult(fistId), openPalmGestureResult(openId)], 350);
+    frame = controller.update(stable, [fistAt(0), openAt(2)], 350);
+    expect(frame.state).toBe(InteractionState.ROTATING_MODEL);
+
+    // Abre a mão do punho -> solta o gesto, e a mudança de posição vira um comando no histórico.
+    stable = stateMachine.update([openPalmGestureResult(fistId), openPalmGestureResult(openId)], 400);
+    frame = controller.update(stable, [fistAt(0), openAt(2)], 400);
+    expect(frame.state).toBe(InteractionState.IDLE);
+    expect(history.canUndo).toBe(true);
   });
 });
