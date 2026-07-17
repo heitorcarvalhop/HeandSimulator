@@ -272,13 +272,10 @@ câmera real, ver `src/tests/fixtures/handPoses.ts`):
   numa página HTML mínima fora deste projeto, só com `getUserMedia` — o problema é do
   Windows, não do app: o serviço **FrameServer** (Servidor de Quadros de Câmera do
   Windows) trava e passa a bloquear qualquer programa. Solução mais rápida: reiniciar o
-  PC. Sem reiniciar, abra o PowerShell **como Administrador** e rode:
-  ```powershell
-  Restart-Service -Name FrameServer -Force
-  Restart-Service -Name FrameServerMonitor -Force
-  ```
-  Se persistir depois disso, verifique antivírus com "proteção de webcam" (Kaspersky,
-  Norton, ESET, etc.) e o driver da câmera no Gerenciador de Dispositivos.
+  PC. Sem reiniciar, dê duplo-clique em `scripts/fix-camera.bat` — ele pede elevação
+  (UAC) sozinho e reinicia os serviços `FrameServer`/`FrameServerMonitor`. Se persistir
+  depois disso, verifique antivírus com "proteção de webcam" (Kaspersky, Norton, ESET,
+  etc.) e o driver da câmera no Gerenciador de Dispositivos.
 - **Mãos não aparecem**: verifique iluminação; o MediaPipe precisa de contraste razoável
   entre a mão e o fundo. O HUD mostra "Mãos: 0" quando nada é detectado.
 - **FPS baixo**: desligue o bloom no botão "Bloom On/Off" ou aguarde a redução automática
